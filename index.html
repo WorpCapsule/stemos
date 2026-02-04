@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Stem//OS - Workstation</title>
+    
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0a0a0a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="icon.png">
+
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="top-bar">
+        <h1>Stem//OS</h1>
+        <div class="transport">
+            <button class="btn" id="importBtn">Import</button>
+            <div class="divider"></div>
+            <button class="btn" id="playPauseBtn" disabled>Play</button>
+            <button class="btn" id="stopBtn" disabled>Stop</button>
+            <button class="btn" id="loopBtn" disabled>Loop</button>
+            <div class="divider"></div>
+            <button class="btn" id="recordBtn" disabled>
+                <div class="rec-dot"></div> REC
+            </button>
+            <div class="divider"></div>
+            <button class="btn" id="layoutBtn" title="Toggle Layout">
+                <span style="font-size:1.1em; font-weight:bold;">☷</span>
+            </button>
+        </div>
+    </div>
+
+    <div class="timeline-container">
+        <span id="currentTime">0:00</span>
+        <input type="range" class="seek-bar" id="seekBar" value="0" min="0" max="100" step="0.01" disabled>
+        <span id="totalTime">0:00</span>
+    </div>
+
+    <div class="mixer" id="mixerBoard"></div>
+
+    <div class="loader" id="loader">DECODING AUDIO...</div>
+
+    <div class="modal" id="importModal">
+        <div class="modal-box big-modal">
+            <h2 class="modal-title">SMART IMPORT</h2>
+            
+            <div class="drop-zone" id="dropZone">
+                <p>Tap to select files<br>or Drag & Drop</p>
+                <input type="file" id="bulkFileBtn" multiple accept="audio/*">
+            </div>
+
+            <div class="assignment-list" id="assignmentList"></div>
+
+            <div class="modal-footer" style="justify-content: space-between;">
+                <button class="btn danger" id="clearBtn">Clear All</button>
+                
+                <div style="display:flex; gap:10px;">
+                    <button class="btn" id="cancelModalBtn">Cancel</button>
+                    <button class="btn active" id="loadStemsBtn" disabled>Load Mixer</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
