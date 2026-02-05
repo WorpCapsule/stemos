@@ -1,16 +1,19 @@
-const TRACKS = ['Lead Vocal', 'Backing Vocal', 'Drums', 'Bass', 'Piano', 'Guitar', 'Other'];
+// TRACKS CONFIGURATION
+const TRACKS = ['Lead Vocal', 'Backing Vocal', 'Drums', 'Bass', 'Piano', 'Guitar', 'Other', 'Instrumental'];
 const DOT_COUNT = 20;
 
 let audioCtx, duration = 0, startTime = 0, pausedAt = 0, isPlaying = false, isLooping = false, isMouseDown = false;
-let buffers = new Array(7).fill(null), sources = new Array(7).fill(null), gains = new Array(7).fill(null);
-let analysers = new Array(7).fill(null), freqData = new Array(7).fill(null);
+
+// Arrays sized to 8
+let buffers = new Array(8).fill(null), sources = new Array(8).fill(null), gains = new Array(8).fill(null);
+let analysers = new Array(8).fill(null), freqData = new Array(8).fill(null);
 
 // State Arrays
-let volumeState = new Array(7).fill(1.0);
-let muteState = new Array(7).fill(false);
-let soloState = new Array(7).fill(false);
-let linkState = new Array(7).fill(false);
-let peakHold = new Array(7).fill(0);
+let volumeState = new Array(8).fill(1.0);
+let muteState = new Array(8).fill(false);
+let soloState = new Array(8).fill(false);
+let linkState = new Array(8).fill(false);
+let peakHold = new Array(8).fill(0);
 let uploadedFiles = []; 
 
 // Recording State
@@ -54,7 +57,7 @@ function renderMixer(activeIndices = []) {
     
     // EMPTY STATE CHECK
     if (!activeIndices || activeIndices.length === 0) {
-        mixerBoard.classList.add('is-empty'); // <--- ADDS CSS CLASS FOR SHAPE
+        mixerBoard.classList.add('is-empty');
         mixerBoard.innerHTML = `
             <div class="empty-state">
                 <div style="font-size:2rem; opacity:0.3;">📂</div>
@@ -64,7 +67,7 @@ function renderMixer(activeIndices = []) {
     }
 
     // STEMS LOADED
-    mixerBoard.classList.remove('is-empty'); // <--- REMOVES CSS CLASS
+    mixerBoard.classList.remove('is-empty');
     
     activeIndices.forEach(i => {
         const name = TRACKS[i];
@@ -107,15 +110,44 @@ function renderMixer(activeIndices = []) {
     });
 }
 
-// --- FILE HANDLING ---
+// --- SMART FILE HANDLING (DUAL FILTERS) ---
 bulkFileBtn.onchange = (e) => { handleFiles(Array.from(e.target.files)); };
 
 function handleFiles(files) {
-    uploadedFiles = files.filter(f => !f.name.toLowerCase().includes('instrum'));
+    // 1. DETECT SEPARATE STEMS
+    // Check for separate Instruments (excluding Inst files)
+    const hasSeparateInsts = files.some(f => {
+        const n = f.name.toLowerCase();
+        return /drum|perc|bass|piano|key|guitar|elec|acous|other|synth|string/i.test(n) && !/inst/i.test(n);
+    });
+
+    // Check for separate Vocals (Lead vs Backing)
+    const hasSeparateVocals = files.some(f => {
+        const n = f.name.toLowerCase();
+        return /lead|back|choir|harmony/i.test(n);
+    });
+
+    // 2. FILTER REDUNDANCIES
+    uploadedFiles = files.filter(f => {
+        const n = f.name.toLowerCase();
+        const isInstrumental = /inst/i.test(n); 
+        // Identify "Generic Vocals" (files named "vocals.wav" but not "lead vocals.wav")
+        const isGenericVocal = /vocal|acapella/i.test(n) && !/lead|back|choir|harmony/i.test(n);
+        
+        // RULE A: If separate instruments exist, DELETE "Instrumental" files.
+        if (isInstrumental && hasSeparateInsts) return false;
+
+        // RULE B: If separate vocals exist (Lead/Backing), DELETE "Generic Vocal" files.
+        if (isGenericVocal && hasSeparateVocals) return false;
+
+        return true; // Keep file
+    });
+
     assignmentList.innerHTML = '';
     loadStemsBtn.disabled = false;
 
-    const assignments = new Array(7).fill(null);
+    // 3. AUTO-ASSIGN
+    const assignments = new Array(8).fill(null);
     const rules = [
         { regex: /lead|vocals-lead/i, index: 0 },
         { regex: /back|choir|harmony|vocals-back/i, index: 1 },
@@ -123,12 +155,14 @@ function handleFiles(files) {
         { regex: /bass/i, index: 3 },
         { regex: /piano|key/i, index: 4 },
         { regex: /guitar|elec|acous/i, index: 5 },
-        { regex: /other|synth|string/i, index: 6 }
+        { regex: /other|synth|string|brass|fx/i, index: 6 },
+        { regex: /inst/i, index: 7 }
     ];
 
     uploadedFiles.forEach(file => {
         const name = file.name.toLowerCase();
         let matched = false;
+        
         for (let rule of rules) {
             if (rule.regex.test(name) && !assignments[rule.index]) {
                 assignments[rule.index] = file;
@@ -136,11 +170,15 @@ function handleFiles(files) {
                 break;
             }
         }
-        if (!matched && name.includes('vocal') && name.includes('other') && !assignments[0]) {
+        
+        // Fallback: If "vocal" or "acapella" survived the filter but didn't match a specific track,
+        // it means it's the only vocal track. Assign to Lead (Track 0).
+        if (!matched && (name.includes('vocal') || name.includes('acapella')) && !assignments[0]) {
              assignments[0] = file;
         }
     });
 
+    // 4. GENERATE UI
     TRACKS.forEach((trackName, i) => {
         const row = document.createElement('div');
         row.className = 'assign-row';
@@ -217,7 +255,7 @@ async function processImport() {
 
 function clearProject() {
     stopPlayback();
-    buffers = new Array(7).fill(null);
+    buffers = new Array(8).fill(null);
     uploadedFiles = [];
     duration = 0;
     pausedAt = 0;
@@ -230,7 +268,6 @@ function clearProject() {
     assignmentList.innerHTML = '';
     renderMixer([]); 
     
-    // Reset Seek Bar Gradient using backgroundImage
     seekBar.value = 0;
     seekBar.style.backgroundImage = `linear-gradient(to right, #e6e6e6 0%, #222 0%)`;
     
@@ -367,11 +404,10 @@ function stopPlayback() {
     updateSeekUI(true);
 }
 
-// --- COMPLEX GRADIENT LOGIC (Red Shadow + Fade) ---
+// --- COMPLEX GRADIENT LOGIC ---
 function updateSeekUI(reset = false) {
     if (reset === true) { 
         seekBar.value = 0; 
-        // FIX: Use backgroundImage so CSS background-size stays 100% 2px
         seekBar.style.backgroundImage = `linear-gradient(to right, #e6e6e6 0%, #222 0%)`;
         currentTimeLabel.innerText = "0:00"; 
         return; 
@@ -381,12 +417,8 @@ function updateSeekUI(reset = false) {
     if (isPlaying) {
         current = audioCtx.currentTime - startTime;
         
-        // CHECK END OF TRACK
         if (current >= duration) {
-            // Stop recording if active
             if (isRecording) toggleRecording();
-            
-            // Loop or Stop
             if (isLooping) {
                 stopPlayback(); 
                 play(0);
@@ -403,16 +435,13 @@ function updateSeekUI(reset = false) {
     seekBar.value = currentPct;
     currentTimeLabel.innerText = formatTime(current);
     
-    // GRADIENT COLORS with ALPHA
     const redColor = `rgba(255, 59, 48, ${recShadowAlpha})`;
-
     let shadowGradient = '';
+    
     if (isRecording) {
-        // Active Recording
         const startPct = (recStartTime / duration) * 100;
         shadowGradient = `linear-gradient(to right, transparent 0%, transparent ${startPct}%, #ff3b30 ${startPct}%, #ff3b30 ${currentPct}%, transparent ${currentPct}%, transparent 100%)`;
     } else if (showRecShadow) {
-        // Stopped (Shadow Phase)
         const startPct = (recStartTime / duration) * 100;
         const endPct = (recEndTime / duration) * 100;
         shadowGradient = `linear-gradient(to right, transparent 0%, transparent ${startPct}%, ${redColor} ${startPct}%, ${redColor} ${endPct}%, transparent ${endPct}%, transparent 100%)`;
@@ -429,30 +458,23 @@ function updateSeekUI(reset = false) {
     if (isPlaying) window.seekAnim = requestAnimationFrame(() => updateSeekUI());
 }
 
-// --- RECORDER (Fading Logic) ---
+// --- RECORDER ---
 function toggleRecording() {
     if (isRecording) {
-        // STOP
         mediaRecorder.stop();
         recordBtn.classList.remove('recording');
         seekBar.classList.remove('recording'); 
         isRecording = false;
         
-        // Setup Shadow
         recEndTime = isPlaying ? (audioCtx.currentTime - startTime) : pausedAt;
         showRecShadow = true;
         recShadowAlpha = 1.0;
         
-        // Wait 8 Seconds, then fade out
         if (recShadowTimeout) clearTimeout(recShadowTimeout);
         recShadowTimeout = setTimeout(() => {
-            
-            // FADE LOOP
             let fadeInterval = setInterval(() => {
-                recShadowAlpha -= 0.02; // Fade speed
-                
+                recShadowAlpha -= 0.02; 
                 if (!isPlaying) updateSeekUI(); 
-
                 if (recShadowAlpha <= 0) {
                     clearInterval(fadeInterval);
                     showRecShadow = false;
@@ -460,11 +482,9 @@ function toggleRecording() {
                     if (!isPlaying) updateSeekUI(); 
                 }
             }, 20);
-
         }, 8000);
 
     } else {
-        // START
         chunks = [];
         mediaRecorder = new MediaRecorder(recDest.stream);
         mediaRecorder.ondataavailable = e => chunks.push(e.data);
@@ -480,15 +500,13 @@ function toggleRecording() {
         seekBar.classList.add('recording');
         isRecording = true;
         
-        // Clear old shadow immediately on new record
         showRecShadow = false;
         recShadowAlpha = 1.0;
-        
         recStartTime = isPlaying ? (audioCtx.currentTime - startTime) : pausedAt;
     }
 }
 
-// --- VISUALIZERS (12 BARS) ---
+// --- VISUALIZERS ---
 function renderVisualizers() {
     if (!isPlaying) { 
         document.querySelectorAll('.vu-bar').forEach(b => b.className = 'vu-bar'); 
@@ -535,7 +553,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() === 'r') toggleRecording();
     if (e.code === 'Space') { e.preventDefault(); isPlaying ? pausePlayback() : play(pausedAt); }
 
-    if (e.key >= '1' && e.key <= '7') {
+    if (e.key >= '1' && e.key <= '8') {
         const i = parseInt(e.key) - 1;
         if (keysPressed['s']) toggleSolo(i);
         else if (keysPressed['l']) toggleLink(i);
@@ -563,21 +581,18 @@ recordBtn.onclick = toggleRecording;
 loopBtn.onclick = () => { isLooping = !isLooping; loopBtn.classList.toggle('active', isLooping); };
 layoutBtn.onclick = () => { mixerBoard.classList.toggle('rack-view'); layoutBtn.classList.toggle('active'); };
 
-// SEEK BAR HANDLER (Prevent Reset on Drag-to-End)
+// SEEK BAR HANDLER
 seekBar.oninput = (e) => {
     const val = parseFloat(e.target.value);
     let newPos = (val / 100) * duration;
     
-    // Clamp
     if (newPos > duration) newPos = duration;
     
     pausedAt = newPos;
     updateSeekUI(); 
     
-    // Check if dragging at end
     if (newPos >= duration) {
         if (isPlaying) {
-            // Manual Stop logic: DO NOT call stopPlayback() to avoid 0 reset
             sources.forEach(s => { if (s) try { s.stop(); } catch(e) {} });
             isPlaying = false;
             playPauseBtn.innerText = "PLAY";
