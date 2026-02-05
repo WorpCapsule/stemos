@@ -2,16 +2,18 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Stem//OS - Workstation</title>
     
     <link rel="manifest" href="manifest.json">
-    <meta name="theme-color" content="#0a0a0a">
+    <link rel="icon" type="image/png" href="icon.png">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="apple-touch-icon" href="icon.png">
 
-    <link rel="icon" type="image/png" href="icon.png">
+    <script src="https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js"></script>
+
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -29,10 +31,9 @@
                 <div class="rec-dot"></div> REC
             </button>
             <div class="divider"></div>
-            <button class="btn" id="layoutBtn" title="Toggle Layout">
-                <span style="font-size:1.1em; font-weight:bold;">☷</span>
-            </button>
-            <button class="btn" id="helpBtn" title="Shortcuts">?</button>
+            <button class="btn" id="masterBtn" title="Toggle Master Track">M</button>
+            <button class="btn" id="layoutBtn" title="Toggle Layout">☷</button>
+            <button class="btn" id="helpBtn">?</button>
         </div>
     </div>
 
@@ -42,9 +43,57 @@
         <span id="totalTime">0:00</span>
     </div>
 
-    <div class="mixer" id="mixerBoard"></div>
+    <div class="mixer" id="mixerBoard">
+        </div>
 
     <div class="loader" id="loader">DECODING AUDIO...</div>
+
+    <div class="modal" id="encodingModal">
+        <div class="modal-box help-box" style="text-align: center; border-color: var(--solo-color);">
+            <h2 class="modal-title" id="encodingStatus">ENCODING...</h2>
+            <div class="progress-bg">
+                <div class="progress-fill" id="encodingBar"></div>
+            </div>
+            <p id="encodingPercent" style="color: #888; font-size: 0.8rem; margin-top: 10px;">0%</p>
+        </div>
+    </div>
+
+    <div class="modal" id="recSettingsModal">
+        <div class="modal-box help-box">
+            <h2 class="modal-title">🔴 REC SETTINGS</h2>
+            <div class="help-list">
+                <div class="assign-row">
+                    <div class="assign-label">File Name</div>
+                    <input type="text" id="recFileName" class="assign-select" placeholder="stem_mix">
+                </div>
+                <div class="assign-row" style="margin-top:10px;">
+                    <div class="assign-label">Format</div>
+                    <select id="recFormat" class="assign-select">
+                        <option value="wav">WAV (Lossless)</option>
+                        <option value="mp3">MP3 (Compressed)</option>
+                        <option value="mp4">MP4 (Square Video)</option>
+                    </select>
+                </div>
+                <div class="assign-row" id="bitrateRow" style="margin-top:10px;">
+                    <div class="assign-label">Bitrate</div>
+                    <select id="recBitrate" class="assign-select">
+                        <option value="320">320 kbps (Pro)</option>
+                        <option value="256">256 kbps (High)</option>
+                        <option value="192">192 kbps (Std)</option>
+                        <option value="128">128 kbps (Low)</option>
+                    </select>
+                </div>
+                <div class="assign-row" id="videoBgRow" style="margin-top:10px; display:none;">
+                    <div class="assign-label">Image</div>
+                    <input type="file" id="recBgImage" class="assign-select" accept="image/*" style="font-size: 0.7rem;">
+                </div>
+            </div>
+            <div class="modal-footer" style="justify-content: space-between; border-top: none;">
+                <button class="btn" id="cancelRecSettings">Cancel</button>
+                <button class="btn active" id="saveRecSettings" style="flex-grow: 1; margin-left: 10px;">START REC</button>
+            </div>
+        </div>
+    </div>
 
     <div class="modal" id="importModal">
         <div class="modal-box big-modal">
@@ -70,42 +119,22 @@
             <p style="text-align: center; color: #888; font-size: 0.8rem; margin-bottom: 20px; margin-top:0;">
                 Become a power user with these quick controls.
             </p>
-            
             <div class="help-list">
-                <div class="help-row">
-                    <div class="shortcut-combo"><span class="key">Space</span></div>
-                    <span>Play / Pause</span>
-                </div>
-                <div class="help-row">
-                    <div class="shortcut-combo"><span class="key">R</span></div>
-                    <span>Record Output</span>
-                </div>
-                <div class="help-row">
-                    <div class="shortcut-combo"><span class="key">1</span> - <span class="key">7</span></div>
-                    <span>Mute Track</span>
-                </div>
-                <div class="help-row">
-                    <div class="shortcut-combo"><span class="key">S</span> + <span class="key">#</span></div>
-                    <span>Solo Track</span>
-                </div>
-                <div class="help-row">
-                    <div class="shortcut-combo"><span class="key">L</span> + <span class="key">#</span></div>
-                    <span>Link Track</span>
-                </div>
-                <div class="help-row">
-                    <div class="shortcut-combo"><span class="key">←</span> <span class="key">→</span></div>
-                    <span>Seek 5s</span>
-                </div>
+                <div class="help-row"><div class="shortcut-combo"><span class="key">Space</span></div><span>Play / Pause</span></div>
+                <div class="help-row"><div class="shortcut-combo"><span class="key">R</span></div><span>Record Output</span></div>
+                <div class="help-row"><div class="shortcut-combo"><span class="key">1</span> - <span class="key">8</span></div><span>Mute Track</span></div>
+                <div class="help-row"><div class="shortcut-combo"><span class="key">S</span> + <span class="key">#</span></div><span>Solo Track</span></div>
+                <div class="help-row"><div class="shortcut-combo"><span class="key">L</span> + <span class="key">#</span></div><span>Link Track</span></div>
+                <div class="help-row"><div class="shortcut-combo"><span class="key">←</span> <span class="key">→</span></div><span>Seek 5s</span></div>
             </div>
-
             <div class="modal-footer" style="justify-content: center; border-top: none;">
                 <button class="btn active" id="closeHelpBtn" style="padding: 12px 30px; border-radius: 20px;">Got it</button>
             </div>
         </div>
     </div>
 
+    <canvas id="videoCanvas" width="1080" height="1080" style="display:none;"></canvas>
+
     <script src="script.js"></script>
 </body>
 </html>
-
-
