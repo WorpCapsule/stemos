@@ -4,7 +4,8 @@
     --surface-hover: #1f1f1f;
     --primary: #e6e6e6; 
     --dim: #333;        
-    --solo-color: #ffd700; 
+    /* CYBER LIME */
+    --solo-color: #ccff00; 
     --mute-color: #ff3b30; 
     --link-color: #00ffff;
     --font-main: 'Courier New', Courier, monospace;
@@ -23,11 +24,21 @@ body {
     overflow: hidden; 
     user-select: none;
     -webkit-tap-highlight-color: transparent;
+    padding-top: env(safe-area-inset-top); 
+    padding-bottom: env(safe-area-inset-bottom);
 }
 
 /* --- TRANSPORT --- */
 .top-bar { width: 100%; max-width: 950px; display: flex; justify-content: space-between; align-items: center; padding: 20px; flex-shrink: 0; }
-h1 { font-size: 1rem; letter-spacing: 0.2rem; text-transform: uppercase; color: #666; margin: 0; }
+h1 { 
+    font-size: clamp(0.8rem, 5vw, 1rem); 
+    letter-spacing: 0.2rem; 
+    text-transform: uppercase; 
+    color: #666; 
+    margin: 0; 
+    white-space: nowrap; 
+}
+
 .transport { display: flex; gap: 10px; align-items: center; }
 .divider { width: 1px; height: 20px; background: #333; margin: 0 5px; }
 
@@ -36,6 +47,7 @@ h1 { font-size: 1rem; letter-spacing: 0.2rem; text-transform: uppercase; color: 
     cursor: pointer; font-family: inherit; text-transform: uppercase; font-size: 0.75rem; 
     border-radius: 4px; transition: 0.2s; display: flex; align-items: center; gap: 6px;
     touch-action: manipulation;
+    justify-content: center; /* CHANGED: Centers text in buttons (fixes START REC) */
 }
 .btn:hover:not(:disabled) { background: var(--surface-hover); color: #fff; }
 .btn.active { background: var(--primary); color: #000; box-shadow: 0 0 10px var(--primary); }
@@ -53,7 +65,6 @@ h1 { font-size: 1rem; letter-spacing: 0.2rem; text-transform: uppercase; color: 
 .timeline-container { width: 90%; max-width: 860px; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; position: relative; z-index: 50; flex-shrink: 0; }
 #currentTime, #totalTime { font-size: 0.75rem; color: #555; width: 45px; font-variant-numeric: tabular-nums; }
 
-/* SEEK BAR */
 input[type=range].seek-bar { 
     -webkit-appearance: none; width: 100%; 
     cursor: pointer; padding: 14px 0; 
@@ -75,7 +86,7 @@ input[type=range].seek-bar.recording::-webkit-slider-thumb {
     background: #ff3b30; box-shadow: 0 0 12px #ff3b30; border-color: #fff; transform: scale(1.2);
 }
 
-/* --- MIXER (Default: Horizontal Mode) --- */
+/* --- MIXER --- */
 .mixer { 
     display: flex; gap: 12px; padding: 25px; 
     background: #0f0f0f; border-radius: 16px; border: 1px solid #222; 
@@ -89,27 +100,24 @@ input[type=range].seek-bar.recording::-webkit-slider-thumb {
 }
 .mixer::-webkit-scrollbar { display: none; }
 
-/* --- EMPTY STATE (Horizontal) --- */
-.empty-state {
-    width: 400px;
-    height: 140px; 
-    margin: auto; 
-    box-sizing: border-box;
-    border: 2px dashed #333;
-    border-radius: 12px;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    color: #444; gap: 15px; flex-shrink: 0;
-}
+/* EMPTY STATE */
+.empty-state { width: 400px; height: 140px; margin: auto; box-sizing: border-box; border: 2px dashed #333; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #444; gap: 15px; flex-shrink: 0; }
 .empty-state p { margin: 0; font-size: 0.9rem; letter-spacing: 2px; text-transform: uppercase; white-space: nowrap; }
+.mixer.rack-view .empty-state { width: 140px; height: 400px; }
 
-/* --- EMPTY STATE (Vertical Override) --- */
-.mixer.rack-view .empty-state {
-    width: 140px;
-    height: 400px;
+/* CHANNELS */
+.channel { display: flex; flex-direction: column; align-items: center; width: 85px; flex-shrink: 0; transition: all 0.3s ease; }
+/* Distinct style for Master Channel */
+.master-channel { border-right: 1px dashed #333; padding-right: 15px; margin-right: 5px; }
+
+/* GLOWING MASTER TEXT */
+.master-channel .track-name {
+    color: #fff !important;
+    text-shadow: 0 0 8px rgba(255, 255, 255, 0.8), 0 0 15px rgba(255, 255, 255, 0.4);
+    font-weight: 900;
+    letter-spacing: 1px;
 }
 
-/* --- CHANNEL STRIPS --- */
-.channel { display: flex; flex-direction: column; align-items: center; width: 85px; flex-shrink: 0; transition: all 0.3s ease; }
 .track-name { font-size: 0.6rem; color: #555; margin-bottom: 10px; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; text-align: center; }
 
 /* METER */
@@ -123,8 +131,16 @@ input[type=range].seek-bar.recording::-webkit-slider-thumb {
 .vu-bar.active-high { background: #ff3b30; box-shadow: 0 0 8px #ff3b30; }
 
 .dot-slider-container { width: 50px; height: 180px; display: flex; flex-direction: column-reverse; justify-content: space-between; cursor: ns-resize; padding: 5px; touch-action: none; }
-.dot { width: 100%; height: 5px; background-color: var(--dim); border-radius: 4px; pointer-events: none; }
+.dot { width: 100%; height: 5px; background-color: var(--dim); border-radius: 4px; pointer-events: none; transition: background-color 0.2s, opacity 0.3s ease, transform 0.3s ease; }
 .dot.lit { background-color: var(--primary); box-shadow: 0 0 5px rgba(255,255,255,0.3); }
+
+/* Muted State for Dots */
+.dot-slider-container.dots-muted .dot {
+    opacity: 0.3;
+    transform: scale(0.8);
+    background-color: #222 !important; 
+    box-shadow: none !important;
+}
 
 /* CONTROLS */
 .channel-controls { display: flex; flex-direction: column; gap: 6px; margin-top: 15px; width: 100%; }
@@ -134,12 +150,11 @@ input[type=range].seek-bar.recording::-webkit-slider-thumb {
 .ctrl-btn.link.active { background: var(--link-color); color: #000; box-shadow: 0 0 10px var(--link-color); }
 .ctrl-btn.dimmed { opacity: 0.1; pointer-events: none; }
 
-/* --- RACK VIEW (Vertical Logic) --- */
-.mixer.rack-view {
-    flex-direction: column; overflow-x: hidden; overflow-y: auto; align-items: stretch; padding: 15px; gap: 15px;
-    justify-content: flex-start;
-}
+/* RACK VIEW */
+.mixer.rack-view { flex-direction: column; overflow-x: hidden; overflow-y: auto; align-items: stretch; padding: 15px; gap: 15px; justify-content: flex-start; }
 .mixer.rack-view .channel { flex-direction: row; width: 100%; border-bottom: 1px solid #222; padding-bottom: 10px; justify-content: space-between; padding-right: 5px; align-items: center; }
+.mixer.rack-view .master-channel { border-right: none; border-bottom: 2px dashed #444; padding-right: 5px; margin-right: 0; padding-bottom: 15px; margin-bottom: 10px; }
+
 .mixer.rack-view .track-name { width: 80px; text-align: left; font-size: 0.7rem; white-space: normal; margin-bottom: 0; }
 .mixer.rack-view .meter-container { width: 30px; margin-bottom: 0; margin-right: 15px; align-items: center; }
 .mixer.rack-view .vu-meter { flex-direction: column-reverse; width: 8px; height: 55px; gap: 1px; border: none; background: transparent; }
@@ -151,8 +166,10 @@ input[type=range].seek-bar.recording::-webkit-slider-thumb {
 .mixer.rack-view .channel-controls { flex-direction: row; gap: 8px; margin-top: 0; align-items: center; width: auto; justify-content: flex-end; }
 .mixer.rack-view .ctrl-btn { padding: 8px 10px; font-size: 0.6rem; min-width: 45px; }
 
-/* --- MODALS & HELP --- */
-.modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); display: none; justify-content: center; align-items: center; z-index: 100; backdrop-filter: blur(10px); }
+/* MODALS */
+.modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); display: none; justify-content: center; align-items: center; z-index: 100; backdrop-filter: blur(10px); transition: opacity 0.3s ease; opacity: 1; }
+.modal.fading-out { opacity: 0; pointer-events: none; }
+
 .modal-box { background: #111; border: 1px solid #333; padding: 25px; border-radius: 12px; width: 90%; max-width: 450px; box-shadow: 0 0 40px rgba(0,0,0,0.8); display: flex; flex-direction: column; max-height: 85vh; overflow-y: auto; }
 .modal-title { margin: 0 0 15px 0; color: white; font-size: 0.9rem; letter-spacing: 2px; text-align: center; }
 .modal-box.help-box { border-radius: 20px; border: 1px solid #444; background: #161616; }
@@ -171,35 +188,20 @@ input[type=range].seek-bar.recording::-webkit-slider-thumb {
 .modal-footer { margin-top: 20px; display: flex; justify-content: space-between; gap: 10px; border-top: 1px solid #222; padding-top: 15px; }
 .loader { display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); color:white; font-size: 1.1rem; letter-spacing: 5px; z-index: 200; text-align: center; }
 
-/* --- MOBILE OPTIMIZED LAYOUT --- */
-/* This forces the Vertical/Rack view on small screens */
+/* PROGRESS BAR */
+.progress-bg { width: 100%; height: 10px; background: #222; border-radius: 5px; margin: 20px 0; overflow: hidden; }
+.progress-fill { width: 0%; height: 100%; background: var(--solo-color); transition: width 0.1s; }
+
+/* MOBILE */
 @media (max-width: 768px) {
     .top-bar { flex-direction: column; padding: 10px; gap: 10px; }
-    
-    /* Smart Grid Buttons */
     .transport { width: 100%; display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; }
     #importBtn { grid-column: 1 / -1; margin-bottom: 5px; }
     .divider, #layoutBtn, #helpBtn { display: none; }
     .btn { padding: 14px 0; font-size: 0.75rem; width: auto; display: flex; justify-content: center; }
     .timeline-container { width: 95%; }
-
-    /* === FORCE VERTICAL RACK LAYOUT === */
-    .mixer { 
-        padding: 15px; width: 98vw; 
-        flex-direction: column !important;
-        overflow-x: hidden !important; 
-        overflow-y: auto !important; 
-        align-items: stretch !important;
-        justify-content: flex-start !important;
-    }
-
-    /* Force Empty State to be Tall on Mobile */
-    .empty-state {
-        width: 240px !important;
-        height: 450px !important;
-    }
-
-    /* Force Channels to Horizontal Strips */
+    .mixer { padding: 15px; width: 98vw; flex-direction: column !important; overflow-x: hidden !important; overflow-y: auto !important; align-items: stretch !important; justify-content: flex-start !important; }
+    .empty-state { width: 240px !important; height: 450px !important; }
     .channel { flex-direction: row !important; width: 100% !important; border-bottom: 1px solid #222 !important; padding-bottom: 10px !important; justify-content: space-between !important; padding-right: 5px !important; align-items: center !important; }
     .track-name { width: 80px !important; text-align: left !important; font-size: 0.7rem !important; white-space: normal !important; margin-bottom: 0 !important; }
     .meter-container { width: 30px !important; margin-bottom: 0 !important; margin-right: 15px !important; align-items: center !important; }
