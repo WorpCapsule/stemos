@@ -110,18 +110,16 @@ function renderMixer(activeIndices = []) {
     });
 }
 
-// --- SMART FILE HANDLING (DUAL FILTERS) ---
+// --- SMART FILE HANDLING ---
 bulkFileBtn.onchange = (e) => { handleFiles(Array.from(e.target.files)); };
 
 function handleFiles(files) {
     // 1. DETECT SEPARATE STEMS
-    // Check for separate Instruments (excluding Inst files)
     const hasSeparateInsts = files.some(f => {
         const n = f.name.toLowerCase();
         return /drum|perc|bass|piano|key|guitar|elec|acous|other|synth|string/i.test(n) && !/inst/i.test(n);
     });
 
-    // Check for separate Vocals (Lead vs Backing)
     const hasSeparateVocals = files.some(f => {
         const n = f.name.toLowerCase();
         return /lead|back|choir|harmony/i.test(n);
@@ -131,16 +129,15 @@ function handleFiles(files) {
     uploadedFiles = files.filter(f => {
         const n = f.name.toLowerCase();
         const isInstrumental = /inst/i.test(n); 
-        // Identify "Generic Vocals" (files named "vocals.wav" but not "lead vocals.wav")
         const isGenericVocal = /vocal|acapella/i.test(n) && !/lead|back|choir|harmony/i.test(n);
         
-        // RULE A: If separate instruments exist, DELETE "Instrumental" files.
+        // Remove 'Instrumental' if we have broken-out instruments
         if (isInstrumental && hasSeparateInsts) return false;
-
-        // RULE B: If separate vocals exist (Lead/Backing), DELETE "Generic Vocal" files.
+        
+        // Remove 'Generic Vocals' only if we have explicit Lead/Backing tracks
         if (isGenericVocal && hasSeparateVocals) return false;
 
-        return true; // Keep file
+        return true; 
     });
 
     assignmentList.innerHTML = '';
@@ -149,13 +146,24 @@ function handleFiles(files) {
     // 3. AUTO-ASSIGN
     const assignments = new Array(8).fill(null);
     const rules = [
-        { regex: /lead|vocals-lead/i, index: 0 },
-        { regex: /back|choir|harmony|vocals-back/i, index: 1 },
+        // Track 0: Lead (Explicit) OR 'Main'
+        { regex: /lead|vocals-lead|main/i, index: 0 },
+        
+        // Track 1: Backing 
+        // FIX: Match 'choir' BUT ignore if it says 'other' (e.g. vocal_choir_other -> NOT backing)
+        { regex: /(back|choir|harmony)(?!.*other)/i, index: 1 },
+        
+        // Instruments
         { regex: /drum|perc/i, index: 2 },
         { regex: /bass/i, index: 3 },
         { regex: /piano|key/i, index: 4 },
         { regex: /guitar|elec|acous/i, index: 5 },
-        { regex: /other|synth|string|brass|fx/i, index: 6 },
+        
+        // Track 6: Other
+        // FIX: Ignore 'other' if it contains 'vocal' (so vocal_choir_other doesn't go here)
+        { regex: /(other|synth|string|brass|fx)(?!.*vocal)/i, index: 6 },
+        
+        // Track 7: Instrumental
         { regex: /inst/i, index: 7 }
     ];
 
@@ -171,8 +179,8 @@ function handleFiles(files) {
             }
         }
         
-        // Fallback: If "vocal" or "acapella" survived the filter but didn't match a specific track,
-        // it means it's the only vocal track. Assign to Lead (Track 0).
+        // Fallback: If it's a vocal track (or 'vocal...other') that wasn't caught by Backing or Other,
+        // it defaults to Lead (Track 0).
         if (!matched && (name.includes('vocal') || name.includes('acapella')) && !assignments[0]) {
              assignments[0] = file;
         }
