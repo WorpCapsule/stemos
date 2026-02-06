@@ -47,7 +47,7 @@ h1 {
     cursor: pointer; font-family: inherit; text-transform: uppercase; font-size: 0.75rem; 
     border-radius: 4px; transition: 0.2s; display: flex; align-items: center; gap: 6px;
     touch-action: manipulation;
-    justify-content: center; /* CHANGED: Centers text in buttons (fixes START REC) */
+    justify-content: center; 
 }
 .btn:hover:not(:disabled) { background: var(--surface-hover); color: #fff; }
 .btn.active { background: var(--primary); color: #000; box-shadow: 0 0 10px var(--primary); }
@@ -100,17 +100,14 @@ input[type=range].seek-bar.recording::-webkit-slider-thumb {
 }
 .mixer::-webkit-scrollbar { display: none; }
 
-/* EMPTY STATE */
 .empty-state { width: 400px; height: 140px; margin: auto; box-sizing: border-box; border: 2px dashed #333; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #444; gap: 15px; flex-shrink: 0; }
 .empty-state p { margin: 0; font-size: 0.9rem; letter-spacing: 2px; text-transform: uppercase; white-space: nowrap; }
 .mixer.rack-view .empty-state { width: 140px; height: 400px; }
 
 /* CHANNELS */
 .channel { display: flex; flex-direction: column; align-items: center; width: 85px; flex-shrink: 0; transition: all 0.3s ease; }
-/* Distinct style for Master Channel */
 .master-channel { border-right: 1px dashed #333; padding-right: 15px; margin-right: 5px; }
 
-/* GLOWING MASTER TEXT */
 .master-channel .track-name {
     color: #fff !important;
     text-shadow: 0 0 8px rgba(255, 255, 255, 0.8), 0 0 15px rgba(255, 255, 255, 0.4);
@@ -134,7 +131,6 @@ input[type=range].seek-bar.recording::-webkit-slider-thumb {
 .dot { width: 100%; height: 5px; background-color: var(--dim); border-radius: 4px; pointer-events: none; transition: background-color 0.2s, opacity 0.3s ease, transform 0.3s ease; }
 .dot.lit { background-color: var(--primary); box-shadow: 0 0 5px rgba(255,255,255,0.3); }
 
-/* Muted State for Dots */
 .dot-slider-container.dots-muted .dot {
     opacity: 0.3;
     transform: scale(0.8);
@@ -148,21 +144,63 @@ input[type=range].seek-bar.recording::-webkit-slider-thumb {
 .ctrl-btn.mute.active { background: var(--mute-color); color: #000; box-shadow: 0 0 10px var(--mute-color); }
 .ctrl-btn.solo.active { background: var(--solo-color); color: #000; box-shadow: 0 0 10px var(--solo-color); }
 .ctrl-btn.link.active { background: var(--link-color); color: #000; box-shadow: 0 0 10px var(--link-color); }
-.ctrl-btn.dimmed { opacity: 0.1; pointer-events: none; }
+
+/* NEW: Mute Button Inactive (Greyed Out) */
+.ctrl-btn.mute.inactive { 
+    opacity: 0.3; 
+    cursor: not-allowed; 
+    color: #333;
+    pointer-events: none; /* Optional: Prevent clicking while greyed out */
+}
 
 /* RACK VIEW */
-.mixer.rack-view { flex-direction: column; overflow-x: hidden; overflow-y: auto; align-items: stretch; padding: 15px; gap: 15px; justify-content: flex-start; }
+.mixer.rack-view { 
+    flex-direction: column; 
+    overflow-x: hidden; 
+    overflow-y: scroll; /* Force Scrollbar to avoid jump */
+    align-items: stretch; 
+    padding: 15px; 
+    gap: 15px; 
+    justify-content: flex-start; 
+}
 .mixer.rack-view .channel { flex-direction: row; width: 100%; border-bottom: 1px solid #222; padding-bottom: 10px; justify-content: space-between; padding-right: 5px; align-items: center; }
-.mixer.rack-view .master-channel { border-right: none; border-bottom: 2px dashed #444; padding-right: 5px; margin-right: 0; padding-bottom: 15px; margin-bottom: 10px; }
+
+/* Rack View Master Channel */
+.mixer.rack-view .master-channel { 
+    border-right: none; 
+    border-bottom: 2px dashed #444; 
+    padding-right: 5px; 
+    margin-right: 0; 
+    padding-bottom: 15px; 
+    margin-bottom: 10px; 
+}
 
 .mixer.rack-view .track-name { width: 80px; text-align: left; font-size: 0.7rem; white-space: normal; margin-bottom: 0; }
 .mixer.rack-view .meter-container { width: 30px; margin-bottom: 0; margin-right: 15px; align-items: center; }
 .mixer.rack-view .vu-meter { flex-direction: column-reverse; width: 8px; height: 55px; gap: 1px; border: none; background: transparent; }
 .mixer.rack-view .peak-led { width: 8px; height: 4px; margin-bottom: 4px; }
 .mixer.rack-view .vu-bar { border-radius: 0px; }
-.mixer.rack-view .dot-slider-container { height: 60px; width: 50px; margin: 0 10px; flex-grow: 1; max-width: 300px; justify-content: center; gap: 2px; }
+
+/* SLIDER IN RACK VIEW (Horizontal) */
+.mixer.rack-view .dot-slider-container { 
+    height: 60px; 
+    width: 50px; 
+    margin: 0 10px; 
+    flex-grow: 1; 
+    max-width: 300px; 
+    justify-content: space-between; /* Spread dots horizontally */
+    gap: 2px; 
+    flex-direction: row; /* Horizontal layout */
+    cursor: ew-resize; /* Left/Right cursor */
+}
+
 .mixer.rack-view .dot:nth-child(odd) { display: none; }
-.mixer.rack-view .dot { height: 4px; width: 100%; margin-bottom: 2px; }
+.mixer.rack-view .dot { 
+    height: 100%; /* Full height bars */
+    width: 4px;   /* Thin width */
+    margin-bottom: 0; 
+}
+
 .mixer.rack-view .channel-controls { flex-direction: row; gap: 8px; margin-top: 0; align-items: center; width: auto; justify-content: flex-end; }
 .mixer.rack-view .ctrl-btn { padding: 8px 10px; font-size: 0.6rem; min-width: 45px; }
 
@@ -200,17 +238,34 @@ input[type=range].seek-bar.recording::-webkit-slider-thumb {
     .divider, #layoutBtn, #helpBtn { display: none; }
     .btn { padding: 14px 0; font-size: 0.75rem; width: auto; display: flex; justify-content: center; }
     .timeline-container { width: 95%; }
-    .mixer { padding: 15px; width: 98vw; flex-direction: column !important; overflow-x: hidden !important; overflow-y: auto !important; align-items: stretch !important; justify-content: flex-start !important; }
+    .mixer { padding: 15px; width: 98vw; flex-direction: column !important; overflow-x: hidden !important; overflow-y: scroll !important; align-items: stretch !important; justify-content: flex-start !important; }
     .empty-state { width: 240px !important; height: 450px !important; }
     .channel { flex-direction: row !important; width: 100% !important; border-bottom: 1px solid #222 !important; padding-bottom: 10px !important; justify-content: space-between !important; padding-right: 5px !important; align-items: center !important; }
+    
+    .master-channel { border-right: none !important; border-bottom: 2px dashed #444 !important; padding-right: 5px !important; margin-right: 0 !important; padding-bottom: 15px !important; margin-bottom: 10px !important; }
+
     .track-name { width: 80px !important; text-align: left !important; font-size: 0.7rem !important; white-space: normal !important; margin-bottom: 0 !important; }
     .meter-container { width: 30px !important; margin-bottom: 0 !important; margin-right: 15px !important; align-items: center !important; }
     .vu-meter { flex-direction: column-reverse !important; width: 8px !important; height: 55px !important; gap: 1px !important; border: none !important; background: transparent !important; }
     .peak-led { width: 8px !important; height: 4px !important; margin-bottom: 4px !important; }
     .vu-bar { border-radius: 0px !important; }
-    .dot-slider-container { height: 60px !important; width: 50px !important; margin: 0 10px !important; flex-grow: 1 !important; max-width: 300px !important; justify-content: center !important; gap: 2px !important; }
+    
+    .dot-slider-container { height: 60px !important; width: 50px !important; margin: 0 10px !important; flex-grow: 1 !important; max-width: 300px !important; justify-content: space-between !important; gap: 2px !important; flex-direction: row !important; }
     .dot:nth-child(odd) { display: none !important; }
-    .dot { height: 4px !important; width: 100% !important; margin-bottom: 2px !important; }
+    .dot { height: 100% !important; width: 4px !important; margin-bottom: 0 !important; }
+
     .channel-controls { flex-direction: row !important; gap: 8px !important; margin-top: 0 !important; align-items: center !important; width: auto !important; justify-content: flex-end !important; }
     .ctrl-btn { padding: 8px 10px !important; font-size: 0.6rem !important; min-width: 45px !important; }
+}
+
+/* --- SPACERS for Rack View alignment --- */
+.rack-spacer { display: none; }
+.mixer.rack-view .rack-spacer { 
+    display: block; 
+    visibility: hidden; 
+    pointer-events: none; 
+    /* Force exact match to controls to prevent slider compression */
+    min-width: 45px;
+    padding: 8px 10px;
+    box-sizing: border-box;
 }
