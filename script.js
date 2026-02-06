@@ -5,7 +5,6 @@ const DOT_COUNT = 20;
 // GLOBAL VARIABLES
 let audioCtx, masterGain, masterAnalyser, masterFreqData;
 let duration = 0, startTime = 0, pausedAt = 0, isPlaying = false, isLooping = false, isMouseDown = false;
-let syncInterval; 
 let masterVolume = 1.0, masterPeakHold = 0;
 let isMasterVisible = false;
 
@@ -18,20 +17,17 @@ let volumeState = new Array(8).fill(1.0);
 let muteState = new Array(8).fill(false);
 let soloState = new Array(8).fill(false);
 let linkState = new Array(8).fill(false);
-let peakHold = new Array(8).fill(0);
 let uploadedFiles = []; 
 
 // PRO RECORDING STATE
 let recNode = null;
 let isRecording = false;
-let recBuffersL = [];
-let recBuffersR = [];
+let recBuffersL = [], recBuffersR = [];
 let recLength = 0;
 let recShadowAlpha = 1.0;
 let showRecShadow = false;
 let recShadowTimeout = null;
-let recStartTime = 0;
-let recEndTime = 0;
+let recStartTime = 0, recEndTime = 0;
 
 // VIDEO RECORDING STATE
 let mediaRecorder = null;
@@ -40,9 +36,6 @@ let videoCanvas = document.getElementById('videoCanvas');
 let videoCtx = videoCanvas.getContext('2d');
 let videoStreamDest = null;
 let videoBgImage = null;
-
-// Keys
-let keysPressed = {};
 
 // DOM Elements
 const mixerBoard = document.getElementById('mixerBoard');
@@ -62,24 +55,22 @@ const recSettingsModal = document.getElementById('recSettingsModal');
 const recFileNameInput = document.getElementById('recFileName');
 const recFormatSelect = document.getElementById('recFormat');
 const recBitrateSelect = document.getElementById('recBitrate');
-const bitrateRow = document.getElementById('bitrateRow'); // Row to toggle
-const videoBgRow = document.getElementById('videoBgRow'); // Row to toggle
+const bitrateRow = document.getElementById('bitrateRow'); 
+const videoBgRow = document.getElementById('videoBgRow'); 
 const recBgImageInput = document.getElementById('recBgImage');
 const saveRecSettingsBtn = document.getElementById('saveRecSettings');
 const cancelRecSettingsBtn = document.getElementById('cancelRecSettings');
 const encodingModal = document.getElementById('encodingModal');
 const encodingBar = document.getElementById('encodingBar');
 const encodingPercent = document.getElementById('encodingPercent');
-const encodingStatus = document.getElementById('encodingStatus');
 const loader = document.getElementById('loader');
 const bulkFileBtn = document.getElementById('bulkFileBtn');
 const assignmentList = document.getElementById('assignmentList');
 const loadStemsBtn = document.getElementById('loadStemsBtn');
 const clearBtn = document.getElementById('clearBtn');
 
-function getClientY(e) {
-    return e.touches ? e.touches[0].clientY : e.clientY;
-}
+function getClientY(e) { return e.touches ? e.touches[0].clientY : e.clientY; }
+function getClientX(e) { return e.touches ? e.touches[0].clientX : e.clientX; }
 
 // --- INITIALIZE AUDIO ENGINE ---
 function initAudio() {
@@ -96,13 +87,13 @@ function initAudio() {
     masterAnalyser.connect(audioCtx.destination);
     
     masterBtn.classList.toggle('active', isMasterVisible);
-    setupMasterUI();
 }
 
 function setupMasterUI() {
     const container = document.getElementById('masterSlider');
     if(!container) return;
     
+    // Rebuild dots
     container.innerHTML = '';
     for (let d = 0; d < DOT_COUNT; d++) {
         const dot = document.createElement('div');
@@ -113,8 +104,15 @@ function setupMasterUI() {
     
     const handleMaster = (e) => {
         const rect = container.getBoundingClientRect();
-        const clientY = getClientY(e);
-        masterVolume = Math.max(0, Math.min(1, 1 - ((clientY - rect.top) / rect.height)));
+        const isHorizontal = mixerBoard.classList.contains('rack-view') || window.innerWidth <= 768;
+        
+        if (isHorizontal) {
+            const clientX = getClientX(e);
+            masterVolume = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        } else {
+            const clientY = getClientY(e);
+            masterVolume = Math.max(0, Math.min(1, 1 - ((clientY - rect.top) / rect.height)));
+        }
         
         if (masterGain) masterGain.gain.setTargetAtTime(masterVolume, audioCtx.currentTime, 0.03);
         
@@ -133,7 +131,11 @@ function setupMasterUI() {
 function renderMixer(activeIndices = []) {
     mixerBoard.innerHTML = '';
     
-    if (!activeIndices || activeIndices.length === 0) {
+    const hasStems = activeIndices && activeIndices.length > 0;
+
+    // CRITICAL FIX: Only show empty state if NO stems AND NO Master are visible.
+    // This allows Master to appear even if stems are missing, or stems to appear without Master.
+    if (!hasStems && !isMasterVisible) {
         mixerBoard.classList.add('is-empty');
         const emptyMsg = document.createElement('div');
         emptyMsg.className = 'empty-state';
@@ -144,80 +146,103 @@ function renderMixer(activeIndices = []) {
     
     mixerBoard.classList.remove('is-empty');
     
-    if (isMasterVisible) {
-        const masterDiv = document.createElement('div');
-        masterDiv.className = 'channel master-channel';
-        masterDiv.id = 'masterChannel';
-        masterDiv.innerHTML = `
-            <div class="track-name" style="color:#fff;">MASTER</div>
-            <div class="meter-container">
-                <div class="peak-led" id="peak-master"></div>
-                <div class="vu-meter" id="vu-master">
-                    ${'<div class="vu-bar"></div>'.repeat(12)}
+    try {
+        // 1. Render Master Channel
+        if (isMasterVisible) {
+            const masterDiv = document.createElement('div');
+            masterDiv.className = 'channel master-channel';
+            masterDiv.id = 'masterChannel';
+            masterDiv.innerHTML = `
+                <div class="track-name" style="color:#fff;">MASTER</div>
+                <div class="meter-container">
+                    <div class="peak-led" id="peak-master"></div>
+                    <div class="vu-meter" id="vu-master">
+                        ${'<div class="vu-bar"></div>'.repeat(12)}
+                    </div>
                 </div>
-            </div>
-            <div class="dot-slider-container" id="masterSlider"></div>
-            <div class="channel-controls">
-                <button class="ctrl-btn" style="opacity:0.3; pointer-events:none;" title="Main Output Bus">BUS</button>
-            </div>
-        `;
-        mixerBoard.appendChild(masterDiv);
-        setupMasterUI();
-    }
-    
-    activeIndices.forEach(i => {
-        const name = TRACKS[i];
-        const channel = document.createElement('div');
-        channel.className = 'channel';
+                <div class="dot-slider-container" id="masterSlider"></div>
+                <div class="channel-controls">
+                    <button class="ctrl-btn" style="opacity:1; pointer-events:none; border-color:transparent; background:transparent; font-size:1.2rem;" title="Raccoon Mode">🦝</button>
+                    <div class="ctrl-btn rack-spacer"></div>
+                    <div class="ctrl-btn rack-spacer"></div>
+                </div>
+            `;
+            mixerBoard.appendChild(masterDiv);
+            setupMasterUI();
+        }
         
-        channel.innerHTML = `
-            <div class="track-name">${name}</div>
-            <div class="meter-container">
-                <div class="peak-led" id="peak-${i}"></div>
-                <div class="vu-meter" id="vu-${i}">${'<div class="vu-bar"></div>'.repeat(12)}</div>
-            </div>
-            <div class="dot-slider-container" id="slider-${i}">
-                ${'<div class="dot lit"></div>'.repeat(DOT_COUNT)}
-            </div>
-            <div class="channel-controls">
-                <button class="ctrl-btn solo" id="solo-${i}">SOLO</button>
-                <button class="ctrl-btn mute" id="mute-${i}">MUTE</button>
-                <button class="ctrl-btn link" id="link-${i}">🔗</button>
-            </div>`;
-        
-        mixerBoard.appendChild(channel);
-        
-        const sliderEl = document.getElementById(`slider-${i}`);
-        const updateSlider = (e) => {
-            const rect = sliderEl.getBoundingClientRect();
-            const clientY = getClientY(e);
-            let val = Math.max(0, Math.min(1, 1 - ((clientY - rect.top) / rect.height)));
-            const diff = val - volumeState[i];
-            volumeState[i] = val;
-            
-            if (linkState[i]) {
-                volumeState.forEach((v, idx) => {
-                    if (linkState[idx] && idx !== i) {
-                        volumeState[idx] = Math.max(0, Math.min(1, v + diff));
-                        updateVisualsForTrack(idx);
+        // 2. Render Stem Channels
+        if (hasStems) {
+            activeIndices.forEach(i => {
+                const name = TRACKS[i];
+                const channel = document.createElement('div');
+                channel.className = 'channel';
+                
+                channel.innerHTML = `
+                    <div class="track-name">${name}</div>
+                    <div class="meter-container">
+                        <div class="peak-led" id="peak-${i}"></div>
+                        <div class="vu-meter" id="vu-${i}">${'<div class="vu-bar"></div>'.repeat(12)}</div>
+                    </div>
+                    <div class="dot-slider-container" id="slider-${i}">
+                        ${'<div class="dot lit"></div>'.repeat(DOT_COUNT)}
+                    </div>
+                    <div class="channel-controls">
+                        <button class="ctrl-btn solo" id="solo-${i}">SOLO</button>
+                        <button class="ctrl-btn mute" id="mute-${i}">MUTE</button>
+                        <button class="ctrl-btn link" id="link-${i}">🔗</button>
+                    </div>`;
+                
+                mixerBoard.appendChild(channel);
+                
+                // Bind Events
+                const sliderEl = document.getElementById(`slider-${i}`);
+                const updateSlider = (e) => {
+                    const rect = sliderEl.getBoundingClientRect();
+                    const isHorizontal = mixerBoard.classList.contains('rack-view') || window.innerWidth <= 768;
+                    
+                    let val;
+                    if (isHorizontal) {
+                        const clientX = getClientX(e);
+                        val = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+                    } else {
+                        const clientY = getClientY(e);
+                        val = Math.max(0, Math.min(1, 1 - ((clientY - rect.top) / rect.height)));
                     }
-                });
-            }
-            updateVisualsForTrack(i);
-            updateAudioEngine();
-        };
 
-        sliderEl.onmousedown = (e) => { isMouseDown = true; updateSlider(e); };
-        sliderEl.addEventListener('mousemove', (e) => { if(isMouseDown) updateSlider(e); });
-        sliderEl.addEventListener('touchstart', (e) => { e.preventDefault(); isMouseDown = true; updateSlider(e); }, {passive: false});
-        sliderEl.addEventListener('touchmove', (e) => { e.preventDefault(); if(isMouseDown) updateSlider(e); }, {passive: false});
+                    const diff = val - volumeState[i];
+                    volumeState[i] = val;
+                    
+                    if (linkState[i]) {
+                        volumeState.forEach((v, idx) => {
+                            if (linkState[idx] && idx !== i) {
+                                volumeState[idx] = Math.max(0, Math.min(1, v + diff));
+                                updateVisualsForTrack(idx);
+                            }
+                        });
+                    }
+                    updateVisualsForTrack(i);
+                    updateAudioEngine();
+                };
 
-        document.getElementById(`solo-${i}`).onclick = () => toggleSolo(i);
-        document.getElementById(`mute-${i}`).onclick = () => toggleMute(i);
-        document.getElementById(`link-${i}`).onclick = () => toggleLink(i);
+                sliderEl.onmousedown = (e) => { isMouseDown = true; updateSlider(e); };
+                sliderEl.addEventListener('mousemove', (e) => { if(isMouseDown) updateSlider(e); });
+                sliderEl.addEventListener('touchstart', (e) => { e.preventDefault(); isMouseDown = true; updateSlider(e); }, {passive: false});
+                sliderEl.addEventListener('touchmove', (e) => { e.preventDefault(); if(isMouseDown) updateSlider(e); }, {passive: false});
+
+                document.getElementById(`solo-${i}`).onclick = () => toggleSolo(i);
+                document.getElementById(`mute-${i}`).onclick = () => toggleMute(i);
+                document.getElementById(`link-${i}`).onclick = () => toggleLink(i);
+                
+                updateVisualsForTrack(i);
+            });
+        }
         
-        updateVisualsForTrack(i);
-    });
+        updateGlobalSoloVisuals();
+        
+    } catch (e) {
+        console.error("Error rendering mixer:", e);
+    }
 }
 
 function updateVisualsForTrack(i) {
@@ -234,6 +259,15 @@ function updateVisualsForTrack(i) {
     document.getElementById(`solo-${i}`).classList.toggle('active', soloState[i]);
     document.getElementById(`mute-${i}`).classList.toggle('active', muteState[i]);
     document.getElementById(`link-${i}`).classList.toggle('active', linkState[i]);
+}
+
+function updateGlobalSoloVisuals() {
+    const anySolo = soloState.some(s => s);
+    const allMuteBtns = document.querySelectorAll('.ctrl-btn.mute');
+    allMuteBtns.forEach(btn => {
+        if (anySolo) btn.classList.add('inactive');
+        else btn.classList.remove('inactive');
+    });
 }
 
 // --- FILE HANDLING ---
@@ -256,25 +290,6 @@ function handleFiles(files) {
     });
     
     uploadedFiles = Array.from(uniqueFiles.values());
-
-    const hasSeparateInsts = uploadedFiles.some(f => {
-        const n = f.name.toLowerCase();
-        return /drum|perc|bass|piano|key|guitar|elec|acous|other|synth|string/i.test(n) && !/inst/i.test(n);
-    });
-    const hasSeparateVocals = uploadedFiles.some(f => {
-        const n = f.name.toLowerCase();
-        return /lead|back|choir|harmony/i.test(n);
-    });
-    
-    uploadedFiles = uploadedFiles.filter(f => {
-        const n = f.name.toLowerCase();
-        const isInstrumental = /inst/i.test(n); 
-        const isGenericVocal = /vocal|acapella/i.test(n) && !/lead|back|choir|harmony/i.test(n);
-        if (isInstrumental && hasSeparateInsts) return false;
-        if (isGenericVocal && hasSeparateVocals) return false;
-        return true; 
-    });
-
     assignmentList.innerHTML = '';
     loadStemsBtn.disabled = false;
     const assignments = new Array(8).fill(null);
@@ -330,12 +345,15 @@ function handleFiles(files) {
 
 async function processImport() {
     initAudio(); 
-    stopPlayback();
+    stopAudio(); 
     importModal.style.display = 'none'; loader.style.display = 'block';
     
     linkState.fill(false); muteState.fill(false); soloState.fill(false); volumeState.fill(1.0);
     const activeIndices = [];
     
+    // Reset buffers
+    buffers.fill(null);
+
     const decodePromises = TRACKS.map(async (_, i) => {
         const select = document.getElementById(`assign-${i}`);
         const fileIndex = select.value;
@@ -353,8 +371,13 @@ async function processImport() {
     
     renderMixer(activeIndices);
     
+    // Robust duration calculation
     duration = 0;
-    buffers.forEach(b => { if (b && b.duration > duration) duration = b.duration; });
+    buffers.forEach(b => { 
+        if (b && typeof b.duration === 'number' && b.duration > duration) {
+            duration = b.duration; 
+        }
+    });
     
     gains = TRACKS.map((_, i) => {
         const g = audioCtx.createGain();
@@ -373,7 +396,7 @@ async function processImport() {
 }
 
 function clearProject() {
-    stopPlayback();
+    stopAudio(); 
     buffers = new Array(8).fill(null); uploadedFiles = []; duration = 0; pausedAt = 0;
     linkState.fill(false); muteState.fill(false); soloState.fill(false); volumeState.fill(1.0);
     assignmentList.innerHTML = '';
@@ -389,17 +412,22 @@ function clearProject() {
 function toggleMaster() {
     isMasterVisible = !isMasterVisible;
     masterBtn.classList.toggle('active', isMasterVisible);
-    if (!clearBtn.disabled) {
-        const activeIndices = buffers.map((b, i) => b ? i : -1).filter(i => i !== -1);
-        renderMixer(activeIndices);
-    }
+    
+    // Determine which stems exist
+    const activeIndices = buffers.map((b, i) => b ? i : -1).filter(i => i !== -1);
+    
+    // Always call renderMixer. It will decide whether to show just master, just stems, both, or empty state.
+    renderMixer(activeIndices);
 }
+
 function toggleLink(i) {
     linkState[i] = !linkState[i];
     const btn = document.getElementById(`link-${i}`);
     if(btn) btn.classList.toggle('active', linkState[i]);
 }
 function toggleMute(i) {
+    const anySolo = soloState.some(s => s);
+    if (anySolo) return;
     const newState = !muteState[i];
     muteState[i] = newState;
     if (linkState[i]) {
@@ -415,6 +443,7 @@ function toggleSolo(i) {
         TRACKS.forEach((_, tIdx) => { if (linkState[tIdx]) soloState[tIdx] = newState; });
     }
     TRACKS.forEach((_, idx) => updateVisualsForTrack(idx));
+    updateGlobalSoloVisuals();
     updateAudioEngine();
 }
 function updateAudioEngine() {
@@ -428,11 +457,32 @@ function updateAudioEngine() {
     });
 }
 
-// --- PLAYBACK ---
 function play(offset) {
     initAudio();
+    
+    // DURATION SAFETY CHECK
+    // If duration is 0, try to recalculate it one last time from buffers
+    if (!duration || duration < 0.1) {
+        duration = 0;
+        buffers.forEach(b => { if (b && b.duration > duration) duration = b.duration; });
+    }
+
+    if (duration === 0) {
+        console.warn("Cannot play: Duration is 0 or no audio loaded.");
+        return;
+    }
+
+    if (isNaN(offset)) offset = 0;
     if (offset >= duration) offset = 0;
-    if (audioCtx.state === 'suspended') audioCtx.resume();
+    
+    // RESUME CONTEXT (Robust Promise handling)
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume().then(() => {
+            // Once resumed, call play again with the same offset
+            play(offset);
+        });
+        return;
+    }
     
     const now = audioCtx.currentTime;
     startTime = now - offset; 
@@ -453,7 +503,6 @@ function play(offset) {
     playPauseBtn.innerText = "PAUSE"; 
     playPauseBtn.classList.add('active');
     
-    // Connect audio to record node/stream if recording is already active
     if (isRecording) {
         if (recFormatSelect.value === 'mp4') {
              if (videoStreamDest) masterGain.connect(videoStreamDest);
@@ -466,12 +515,25 @@ function play(offset) {
     window.seekAnim = requestAnimationFrame(() => updateSeekUI());
 }
 
-function stopPlayback() {
+function pauseAudio() {
+    if (!isPlaying) return;
+    pausedAt = audioCtx.currentTime - startTime;
     sources.forEach(s => { if (s) try { s.stop(); } catch(e) {} });
-    cancelAnimationFrame(window.seekAnim); 
-    isPlaying = false; pausedAt = 0;
-    playPauseBtn.innerText = "PLAY"; playPauseBtn.classList.remove('active');
-    updateSeekUI(true);
+    cancelAnimationFrame(window.seekAnim);
+    isPlaying = false;
+    playPauseBtn.innerText = "PLAY"; 
+    playPauseBtn.classList.remove('active');
+}
+
+function stopAudio() {
+    sources.forEach(s => { if (s) try { s.stop(); } catch(e) {} });
+    cancelAnimationFrame(window.seekAnim);
+    isPlaying = false; 
+    pausedAt = 0; 
+    playPauseBtn.innerText = "PLAY"; 
+    playPauseBtn.classList.remove('active');
+    updateSeekUI(true); 
+    if (isRecording) stopRecording();
 }
 
 function updateSeekUI(reset = false) {
@@ -484,9 +546,11 @@ function updateSeekUI(reset = false) {
     if (!isPlaying) return;
 
     let current = audioCtx.currentTime - startTime;
+    
+    // Stop if we reach the end
     if (current >= duration) {
         if (isRecording) stopRecording();
-        isLooping ? (stopPlayback(), play(0)) : stopPlayback();
+        isLooping ? (stopAudio(), play(0)) : stopAudio(); 
         return;
     }
     pausedAt = current;
@@ -508,7 +572,6 @@ function updateSeekUI(reset = false) {
     window.seekAnim = requestAnimationFrame(() => updateSeekUI());
 }
 
-// --- MASTER VISUALIZER ---
 function renderVisualizers() {
     if (!isPlaying) {
         requestAnimationFrame(renderVisualizers);
@@ -536,13 +599,12 @@ function renderVisualizers() {
     requestAnimationFrame(renderVisualizers);
 }
 
-// --- RECORDER UI ---
 recFormatSelect.onchange = () => {
     if (recFormatSelect.value === 'mp4') {
         bitrateRow.style.display = 'none';
-        videoBgRow.style.display = 'grid'; // Show Image input
+        videoBgRow.style.display = 'grid'; 
     } else {
-        bitrateRow.style.display = 'grid'; // Show Bitrate
+        bitrateRow.style.display = 'grid'; 
         videoBgRow.style.display = 'none';
     }
 };
@@ -578,7 +640,6 @@ saveRecSettingsBtn.onclick = () => {
     }, 300);
 };
 
-// Helper: Draw image nicely cropped (Aspect Fill)
 function drawCenteredCrop(img, ctx, size) {
     if (!img) {
         ctx.fillStyle = "#000";
@@ -593,13 +654,12 @@ function drawCenteredCrop(img, ctx, size) {
     const x = (size / 2) - (img.width / 2) * scale;
     const y = (size / 2) - (img.height / 2) * scale;
     
-    ctx.fillStyle = "#000"; // Background for transparency
+    ctx.fillStyle = "#000"; 
     ctx.fillRect(0, 0, size, size);
     ctx.drawImage(img, x, y, img.width * scale, img.height * scale);
 }
 
 function startRecording() {
-    // Safety check for AudioContext
     if (!audioCtx) initAudio();
     if (audioCtx.state === 'suspended') audioCtx.resume();
 
@@ -611,36 +671,37 @@ function startRecording() {
     const format = recFormatSelect.value;
 
     if (format === 'mp4') {
-        // --- VIDEO RECORDING SETUP ---
         videoStreamDest = audioCtx.createMediaStreamDestination();
         masterGain.connect(videoStreamDest);
 
-        // Initial Draw (Square)
         drawCenteredCrop(videoBgImage, videoCtx, videoCanvas.width);
 
-        // Create Stream (30 FPS)
         const canvasStream = videoCanvas.captureStream(30);
-        
-        // --- AUDIO TRACK FIX ---
-        // Ensure we grab the track explicitly from the destination
         const audioTracks = videoStreamDest.stream.getAudioTracks();
         const combinedStream = new MediaStream([
             ...canvasStream.getVideoTracks(),
             ...audioTracks
         ]);
 
-        // --- MIME TYPE SAFETY ---
-        // Chrome/Firefox handle 'video/webm' best for audio+video
-        let mimeType = 'video/webm;codecs=vp8,opus'; 
-        if (!MediaRecorder.isTypeSupported(mimeType)) {
-             mimeType = 'video/webm'; // Fallback
-        }
+        const options = {
+            audioBitsPerSecond: 128000,
+            videoBitsPerSecond: 2500000
+        };
 
-        mediaRecorder = new MediaRecorder(combinedStream, { 
-            mimeType: mimeType,
-            audioBitsPerSecond: 128000, // Force decent audio quality
-            videoBitsPerSecond: 2500000 
-        });
+        let mimeType = 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"';
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+             mimeType = 'video/mp4'; 
+             if (!MediaRecorder.isTypeSupported(mimeType)) {
+                 mimeType = 'video/webm;codecs=vp8,opus'; 
+             }
+        }
+        options.mimeType = mimeType;
+
+        try {
+            mediaRecorder = new MediaRecorder(combinedStream, options);
+        } catch (e) {
+            mediaRecorder = new MediaRecorder(combinedStream);
+        }
         
         videoChunks = [];
         mediaRecorder.ondataavailable = (e) => { 
@@ -648,7 +709,6 @@ function startRecording() {
         };
         mediaRecorder.start();
 
-        // Loop draw to keep stream active
         const drawLoop = () => {
             if (!isRecording) return;
             drawCenteredCrop(videoBgImage, videoCtx, videoCanvas.width);
@@ -657,7 +717,6 @@ function startRecording() {
         drawLoop();
 
     } else {
-        // --- AUDIO ONLY SETUP ---
         recNode = audioCtx.createScriptProcessor(4096, 2, 2);
         recBuffersL = []; recBuffersR = []; recLength = 0;
         
@@ -677,8 +736,6 @@ function startRecording() {
 
 async function stopRecording() {
     isRecording = false; 
-    
-    // UI Cleanup
     recordBtn.classList.remove('recording'); 
     seekBar.classList.remove('recording');
     recEndTime = isPlaying ? (audioCtx.currentTime - startTime) : pausedAt;
@@ -687,24 +744,21 @@ async function stopRecording() {
     const name = recFileNameInput.value || "stem_mix";
 
     if (format === 'mp4') {
-        // --- FINISH VIDEO ---
         if (mediaRecorder && mediaRecorder.state !== 'inactive') {
             mediaRecorder.stop();
             mediaRecorder.onstop = () => {
                 const blob = new Blob(videoChunks, { type: mediaRecorder.mimeType });
-                
-                // Disconnect audio
                 if (videoStreamDest) {
                     masterGain.disconnect(videoStreamDest);
                     videoStreamDest = null;
                 }
                 
-                // Force extension to .mp4 (Browser will save as WebM container usually, but often plays fine)
-                downloadBlob(blob, `${name}.mp4`);
+                let ext = 'mp4';
+                if (mediaRecorder.mimeType.includes('webm')) ext = 'webm';
+                downloadBlob(blob, `${name}.${ext}`);
             };
         }
     } else {
-        // --- FINISH AUDIO ---
         setTimeout(() => { 
             if(recNode) { recNode.disconnect(); masterGain.disconnect(recNode); recNode = null; } 
         }, 100);
@@ -713,7 +767,6 @@ async function stopRecording() {
         if (format === 'mp3') await exportMp3(name, bitrate); else await exportWav(name);
     }
     
-    // Shadow Logic
     showRecShadow = true; recShadowAlpha = 1.0;
     if (recShadowTimeout) clearTimeout(recShadowTimeout);
     recShadowTimeout = setTimeout(() => {
@@ -796,7 +849,8 @@ document.getElementById('importBtn').onclick = () => document.getElementById('im
 document.getElementById('loadStemsBtn').onclick = processImport;
 document.getElementById('recordBtn').onclick = toggleRecording;
 document.getElementById('masterBtn').onclick = toggleMaster;
-playPauseBtn.onclick = () => isPlaying ? stopPlayback() : play(pausedAt);
+playPauseBtn.onclick = () => isPlaying ? pauseAudio() : play(pausedAt);
+stopBtn.onclick = stopAudio;
 clearBtn.onclick = clearProject;
 seekBar.oninput = (e) => {
     const val = parseFloat(e.target.value);
@@ -804,7 +858,7 @@ seekBar.oninput = (e) => {
     if (newPos > duration) newPos = duration;
     pausedAt = newPos; updateSeekUI(); 
     if (newPos >= duration) {
-        if (isPlaying) stopPlayback();
+        if (isPlaying) stopAudio(); 
         return;
     }
     if (isPlaying) { sources.forEach(s => s && s.stop()); play(newPos); }
@@ -815,6 +869,10 @@ document.getElementById('importModal').onclick = (e) => { if(e.target.id === 'im
 document.getElementById('cancelModalBtn').onclick = () => document.getElementById('importModal').style.display = 'none';
 document.getElementById('helpBtn').onclick = () => document.getElementById('helpModal').style.display='flex';
 document.getElementById('closeHelpBtn').onclick = () => document.getElementById('helpModal').style.display='none';
-document.getElementById('layoutBtn').onclick = () => mixerBoard.classList.toggle('rack-view');
+
+document.getElementById('layoutBtn').onclick = () => {
+    mixerBoard.classList.toggle('rack-view');
+    setupMasterUI(); 
+};
 
 renderMixer([]);
