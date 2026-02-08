@@ -288,7 +288,41 @@ input[type=range].seek-bar.recording::-webkit-slider-thumb {
 .stem-btn.download { color: var(--link-color); }
 .stem-btn.add { color: var(--solo-color); }
 
-.text-btn:hover { text-decoration: underline; color: #888 !important; }
+.text-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.text-btn:hover {
+    color: #fff !important;
+    text-decoration: underline;
+}
+
+/* --- PAGINATION STYLES --- */
+.pagination-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 15px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #333;
+}
+.page-btn {
+    background: #222;
+    color: #888;
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-size: 0.7rem;
+    cursor: pointer;
+}
+.page-btn:hover:not(:disabled) { background: #333; color: #fff; }
+.page-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.page-info { font-size: 0.7rem; color: #666; }
 
 /* MOBILE */
 @media (max-width: 768px) {
