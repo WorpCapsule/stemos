@@ -137,6 +137,7 @@
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; border-bottom:1px solid #333; padding-bottom:10px;">
                 <h2 class="modal-title" style="color:var(--link-color); margin:0; text-align:left;">MVSEP AI</h2>
                 <div style="display:flex; align-items:center; gap: 15px;">
+                    <button class="text-btn" id="mvsepHistoryBtn" style="font-size:0.6rem; color:#aaa; background:none; border:none; cursor:pointer;">History</button>
                     <button class="text-btn" id="mvsepLogoutBtn" style="font-size:0.6rem; color:#666; background:none; border:none; cursor:pointer;">Logout</button>
                     <button id="mvsepTopCloseBtn" style="font-size:1.5rem; line-height:1; color:#fff; background:none; border:none; cursor:pointer; padding:0;">&times;</button>
                 </div>
@@ -174,8 +175,7 @@
                 </div>
 
                 <button class="btn active" id="mvsepLoginBtn" style="width:100%; margin-top:20px;">Connect</button>
-                <button class="btn" id="mvsepCloseLoginBtn" style="width:100%; margin-top:10px; border-color:transparent;">Cancel</button>
-
+                
                 <p style="margin-top:15px; font-size:0.6rem; color:#444; text-align:center;">
                     Credentials are encrypted & stored locally on your device.
                 </p>
@@ -199,7 +199,7 @@
                 </div>
 
                 <div id="mvsepResultsArea" style="display:none; flex-grow:1; overflow-y:auto; margin-top:10px; border-top:1px solid #333; padding-top:10px;">
-                    <h3 style="font-size:0.7rem; color:#888; text-transform:uppercase; margin-bottom:10px;">Generated Stems</h3>
+                    <h3 id="mvsepResultsTitle" style="font-size:0.7rem; color:#888; text-transform:uppercase; margin-bottom:10px;">Generated Stems</h3>
                     <div id="mvsepResultsList" class="stem-list"></div>
                 </div>
                 
