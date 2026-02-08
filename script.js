@@ -3,17 +3,25 @@ const TRACKS = ['Lead Vocal', 'Backing Vocal', 'Drums', 'Bass', 'Piano', 'Guitar
 const DOT_COUNT = 20;
 
 // GLOBAL VARIABLES
-let audioCtx, masterGain, masterAnalyser, masterFreqData;
+let audioCtx, masterGain, masterAnalyser, masterFreqData, scrubFilter;
 let duration = 0, startTime = 0, pausedAt = 0, isPlaying = false, isLooping = false, isMouseDown = false;
 let masterVolume = 1.0, masterPeakHold = 0;
 let isMasterVisible = false;
 
+// Scrubbing State
+let isScrubbing = false;
+let lastScrubTime = 0; // For throttling
+let scrubTimeout = null;
+
 // Arrays sized to 8
 let buffers = new Array(8).fill(null), sources = new Array(8).fill(null), gains = new Array(8).fill(null);
 let analysers = new Array(8).fill(null), freqData = new Array(8).fill(null);
+// Peak Hold State for Tracks
+let trackPeakHolds = new Array(8).fill(0);
 
 // State Arrays
-let volumeState = new Array(8).fill(1.0);
+let volumeState = new Array(8).fill(1.0); // START AT 100%
+let lastVolumeState = new Array(8).fill(1.0); // Remember preference
 let muteState = new Array(8).fill(false);
 let soloState = new Array(8).fill(false);
 let linkState = new Array(8).fill(false);
@@ -21,9 +29,8 @@ let uploadedFiles = [];
 
 // --- CLOUDFLARE WORKER PROXY ---
 const WORKER_HOST = 'https://fiefie.worpcapsule.workers.dev';
-// We define two bases because MVSEP uses different paths for login vs separation
-const API_AUTH = `${WORKER_HOST}/api/app`;           // For Login
-const API_SEP  = `${WORKER_HOST}/api/separation`;    // For Create/Get
+const API_AUTH = `${WORKER_HOST}/api/app`;           
+const API_SEP  = `${WORKER_HOST}/api/separation`;    
 
 // Simple Obfuscation for LocalStorage
 const SEC_KEY = "StemOS_Safe_Key";
@@ -46,6 +53,10 @@ let mvsepJob = {
     logs: [],
     results: [] 
 };
+
+// HISTORY STATE
+let currentHistoryPage = 0;
+const HISTORY_LIMIT = 5;
 
 // PRO RECORDING STATE
 let recordNode = null;
@@ -110,8 +121,8 @@ const mvsepPassInput = document.getElementById('mvsepPassInput');
 const mvsepKeyInput = document.getElementById('mvsepKeyInput'); 
 const mvsepLoginBtn = document.getElementById('mvsepLoginBtn');
 const mvsepLoginError = document.getElementById('mvsepLoginError');
-const mvsepCloseLoginBtn = document.getElementById('mvsepCloseLoginBtn');
 const mvsepLogoutBtn = document.getElementById('mvsepLogoutBtn');
+const mvsepHistoryBtn = document.getElementById('mvsepHistoryBtn'); 
 const mvsepFileBtn = document.getElementById('mvsepFileBtn');
 const mvsepFileName = document.getElementById('mvsepFileName');
 const mvsepLog = document.getElementById('mvsepLog');
@@ -120,17 +131,17 @@ const mvsepBackBtn = document.getElementById('mvsepBackBtn');
 const mvsepCancelWorkBtn = document.getElementById('mvsepCancelWorkBtn');
 const mvsepUploadArea = document.getElementById('mvsepUploadArea');
 const mvsepResultsArea = document.getElementById('mvsepResultsArea');
+const mvsepResultsTitle = document.getElementById('mvsepResultsTitle');
 const mvsepResultsList = document.getElementById('mvsepResultsList');
 const mvsepSaveAllBtn = document.getElementById('mvsepSaveAllBtn');
 const modeLoginBtn = document.getElementById('modeLoginBtn');
 const modeApiBtn = document.getElementById('modeApiBtn');
 const mvsepCredsForm = document.getElementById('mvsepCredsForm');
 const mvsepApiForm = document.getElementById('mvsepApiForm');
-// NEW: Top Close Button
 const mvsepTopCloseBtn = document.getElementById('mvsepTopCloseBtn');
 
 // LOGIN MODE STATE
-let loginMode = 'account'; // 'account' or 'apikey'
+let loginMode = 'account'; 
 
 function getClientY(e) { return e.touches ? e.touches[0].clientY : e.clientY; }
 function getClientX(e) { return e.touches ? e.touches[0].clientX : e.clientX; }
@@ -201,11 +212,20 @@ async function initAudio() {
     } catch(e) { console.error("Worklet Error:", e); }
 
     masterGain = audioCtx.createGain();
+    
+    // NEW: Scrub Filter for muffled seeking
+    scrubFilter = audioCtx.createBiquadFilter();
+    scrubFilter.type = 'lowpass';
+    scrubFilter.frequency.value = 22000; // Open by default
+    scrubFilter.Q.value = 1;
+
     masterAnalyser = audioCtx.createAnalyser();
     masterAnalyser.fftSize = 64;
     masterFreqData = new Uint8Array(masterAnalyser.frequencyBinCount);
     
-    masterGain.connect(masterAnalyser);
+    // Chain: Master -> ScrubFilter -> Analyser -> Dest
+    masterGain.connect(scrubFilter);
+    scrubFilter.connect(masterAnalyser);
     masterAnalyser.connect(audioCtx.destination);
     
     masterBtn.classList.toggle('active', isMasterVisible);
@@ -328,10 +348,22 @@ function renderMixer(activeIndices = []) {
                     const diff = val - volumeState[i];
                     volumeState[i] = val;
                     
+                    if (val > 0.05) lastVolumeState[i] = val;
+                    
+                    if (val > 0 && muteState[i]) {
+                        muteState[i] = false;
+                        updateVisualsForTrack(i);
+                    }
+                    
                     if (linkState[i]) {
                         volumeState.forEach((v, idx) => {
                             if (linkState[idx] && idx !== i) {
-                                volumeState[idx] = Math.max(0, Math.min(1, v + diff));
+                                let newVal = Math.max(0, Math.min(1, v + diff));
+                                volumeState[idx] = newVal;
+                                
+                                if (newVal > 0.05) lastVolumeState[idx] = newVal;
+                                if (newVal > 0 && muteState[idx]) muteState[idx] = false;
+                                
                                 updateVisualsForTrack(idx);
                             }
                         });
@@ -385,28 +417,81 @@ function updateGlobalSoloVisuals() {
     });
 }
 
-// --- FILE HANDLING ---
-bulkFileBtn.onchange = (e) => { handleFiles(Array.from(e.target.files)); };
+function toggleMute(i) {
+    const anySolo = soloState.some(s => s);
+    if (anySolo) return;
+    
+    const newState = !muteState[i];
+    muteState[i] = newState;
+    
+    if (!newState && volumeState[i] < 0.05) {
+        volumeState[i] = lastVolumeState[i];
+    }
 
-function handleFiles(files) {
-    const uniqueFiles = new Map();
+    if (linkState[i]) {
+        TRACKS.forEach((_, tIdx) => { 
+            if (linkState[tIdx]) {
+                muteState[tIdx] = newState;
+                if (!newState && volumeState[tIdx] < 0.05) {
+                    volumeState[tIdx] = lastVolumeState[tIdx];
+                }
+                updateVisualsForTrack(tIdx);
+            }
+        });
+    }
+    updateVisualsForTrack(i);
+    updateAudioEngine();
+}
+
+function toggleLink(i) {
+    linkState[i] = !linkState[i];
+    const btn = document.getElementById(`link-${i}`);
+    if(btn) btn.classList.toggle('active', linkState[i]);
+}
+
+function toggleSolo(i) {
+    const newState = !soloState[i];
+    soloState[i] = newState;
+    if (linkState[i]) {
+        TRACKS.forEach((_, tIdx) => { if (linkState[tIdx]) soloState[tIdx] = newState; });
+    }
+    TRACKS.forEach((_, idx) => updateVisualsForTrack(idx));
+    updateGlobalSoloVisuals();
+    updateAudioEngine();
+}
+
+function updateAudioEngine() {
+    const anySolo = soloState.some(s => s);
+    TRACKS.forEach((_, i) => {
+        if (!gains[i]) return;
+        let shouldPlay = false;
+        if (anySolo) shouldPlay = soloState[i];
+        else shouldPlay = !muteState[i];
+        gains[i].gain.setTargetAtTime(shouldPlay ? volumeState[i] : 0, audioCtx.currentTime, 0.03);
+    });
+}
+
+// --- FILE HANDLING ---
+bulkFileBtn.onchange = (e) => { handleFiles(Array.from(e.target.files), true); };
+
+function handleFiles(files, forceSelect = false) {
+    const previousSelections = TRACKS.map((_, i) => {
+        const el = document.getElementById(`assign-${i}`);
+        return el && el.value !== "" ? parseInt(el.value) : null;
+    });
+
+    const newAddedFiles = [];
     files.forEach(f => {
-        const nameParts = f.name.split('.');
-        if (nameParts.length > 1) nameParts.pop();
-        const nameNoExt = nameParts.join('.');
-        const baseName = nameNoExt.replace(/[- _(]\d+\)?$/, '');
-        
-        if (!uniqueFiles.has(baseName)) uniqueFiles.set(baseName, f);
-        else {
-            const existing = uniqueFiles.get(baseName);
-            if (f.name.length < existing.name.length) uniqueFiles.set(baseName, f);
+        const exists = uploadedFiles.some(existing => existing.name === f.name);
+        if (!exists) {
+            uploadedFiles.push(f);
+            newAddedFiles.push(f);
+        } else {
+            if (forceSelect) newAddedFiles.push(f);
         }
     });
-    
-    uploadedFiles = Array.from(uniqueFiles.values());
-    assignmentList.innerHTML = '';
-    loadStemsBtn.disabled = false;
-    const assignments = new Array(8).fill(null);
+
+    const newAssignments = new Array(8).fill(null);
     const rules = [
         { regex: /lead|vocals-lead|main/i, index: 0 },
         { regex: /(back|choir|harmony)(?!.*other)/i, index: 1 },
@@ -418,45 +503,70 @@ function handleFiles(files) {
         { regex: /inst/i, index: 7 }
     ];
 
-    uploadedFiles.forEach(file => {
+    newAddedFiles.forEach(file => {
         const name = file.name.toLowerCase();
         let matched = false;
         for (let rule of rules) {
-            if (rule.regex.test(name) && !assignments[rule.index]) {
-                assignments[rule.index] = file;
-                matched = true;
-                break;
+            if (rule.regex.test(name)) {
+                if (!newAssignments[rule.index]) {
+                    newAssignments[rule.index] = file;
+                    matched = true;
+                    break;
+                }
             }
         }
         if (!matched && (name.includes('vocal') || name.includes('acapella'))) {
             const looksLikeBacking = /back|harmony|choir/.test(name);
-            if (!assignments[0] && !looksLikeBacking) assignments[0] = file;
+            if (!newAssignments[0] && !looksLikeBacking) newAssignments[0] = file;
         }
     });
-    
-    const hasInstrumentals = [2, 3, 4, 5, 6].some(i => assignments[i] !== null);
-    if (hasInstrumentals) {
-        assignments[7] = null; 
+
+    const finalIndices = new Array(8).fill(null);
+
+    for (let i = 0; i < 8; i++) {
+        if (newAssignments[i]) {
+            const idx = uploadedFiles.findIndex(f => f.name === newAssignments[i].name);
+            if (idx !== -1) finalIndices[i] = idx;
+        } 
+        else if (previousSelections[i] !== null && previousSelections[i] < uploadedFiles.length) {
+            finalIndices[i] = previousSelections[i];
+        }
     }
+
+    const hasDiscreteInstruments = [2, 3, 4, 5, 6].some(i => finalIndices[i] !== null);
+    if (hasDiscreteInstruments) {
+        finalIndices[7] = null; 
+    }
+
+    assignmentList.innerHTML = '';
+    loadStemsBtn.disabled = uploadedFiles.length === 0;
 
     TRACKS.forEach((trackName, i) => {
         const row = document.createElement('div');
         row.className = 'assign-row';
-        row.innerHTML = `<div class="assign-label">${trackName}</div>`;
+        row.innerHTML = `<div class=\"assign-label\">${trackName}</div>`;
         const select = document.createElement('select');
         select.className = 'assign-select';
         select.id = `assign-${i}`;
+        
         const noneOpt = document.createElement('option');
         noneOpt.value = "";
         noneOpt.innerText = "-- Empty --";
         select.appendChild(noneOpt);
+
         uploadedFiles.forEach((file, fIdx) => {
             const opt = document.createElement('option');
             opt.value = fIdx;
             opt.innerText = file.name;
-            if (assignments[i] === file) opt.selected = true;
             select.appendChild(opt);
         });
+
+        if (finalIndices[i] !== null) {
+            select.value = finalIndices[i];
+        } else {
+            select.value = "";
+        }
+        
         row.appendChild(select);
         assignmentList.appendChild(row);
     });
@@ -467,7 +577,9 @@ async function processImport() {
     stopAudio(); 
     importModal.style.display = 'none'; loader.style.display = 'block';
     
-    linkState.fill(false); muteState.fill(false); soloState.fill(false); volumeState.fill(1.0);
+    linkState.fill(false); muteState.fill(false); soloState.fill(false); 
+    volumeState.fill(1.0); // START FULL
+    lastVolumeState.fill(1.0); 
     
     buffers.fill(null);
 
@@ -517,7 +629,9 @@ async function processImport() {
 function clearProject() {
     stopAudio(); 
     buffers = new Array(8).fill(null); uploadedFiles = []; duration = 0; pausedAt = 0;
-    linkState.fill(false); muteState.fill(false); soloState.fill(false); volumeState.fill(1.0);
+    linkState.fill(false); muteState.fill(false); soloState.fill(false); 
+    volumeState.fill(1.0); lastVolumeState.fill(1.0);
+    
     assignmentList.innerHTML = '';
     renderMixer([]); 
     seekBar.value = 0;
@@ -528,8 +642,6 @@ function clearProject() {
 }
 
 // --- MVSEP INTEGRATION ---
-
-// 1. UI Handling
 mvsepModalBtn.onclick = () => {
     importModal.style.display = 'none';
     mvsepModal.style.display = 'flex';
@@ -542,7 +654,8 @@ mvsepModalBtn.onclick = () => {
         } else {
             mvsepLoginView.style.display = 'block';
             mvsepWorkView.style.display = 'none';
-            mvsepLogoutBtn.style.display = 'none'; // Hide logout on login screen
+            mvsepLogoutBtn.style.display = 'none';
+            mvsepHistoryBtn.style.display = 'none';
             setLoginMode('account'); // Reset to default
         }
     }
@@ -556,22 +669,18 @@ function setLoginMode(mode) {
         modeLoginBtn.classList.add('active');
         modeLoginBtn.style.color = '#aaa';
         modeLoginBtn.style.borderBottom = '1px solid var(--primary)';
-        
         modeApiBtn.classList.remove('active');
         modeApiBtn.style.color = '#555';
         modeApiBtn.style.borderBottom = 'none';
-        
         mvsepCredsForm.style.display = 'block';
         mvsepApiForm.style.display = 'none';
     } else {
         modeApiBtn.classList.add('active');
         modeApiBtn.style.color = '#aaa';
         modeApiBtn.style.borderBottom = '1px solid var(--primary)';
-        
         modeLoginBtn.classList.remove('active');
         modeLoginBtn.style.color = '#555';
         modeLoginBtn.style.borderBottom = 'none';
-        
         mvsepCredsForm.style.display = 'none';
         mvsepApiForm.style.display = 'block';
     }
@@ -580,13 +689,14 @@ function setLoginMode(mode) {
 modeLoginBtn.onclick = () => setLoginMode('account');
 modeApiBtn.onclick = () => setLoginMode('apikey');
 
-mvsepCloseLoginBtn.onclick = () => {
-    mvsepModal.style.display = 'none';
-    importModal.style.display = 'flex';
-    // Clear error state
-    mvsepLoginError.style.display = 'none';
-    mvsepLoginView.classList.remove('shake');
-};
+if(document.getElementById('mvsepCloseLoginBtn')) {
+    document.getElementById('mvsepCloseLoginBtn').onclick = () => {
+        mvsepModal.style.display = 'none';
+        importModal.style.display = 'flex';
+        mvsepLoginError.style.display = 'none';
+        mvsepLoginView.classList.remove('shake');
+    };
+}
 
 mvsepLogoutBtn.onclick = () => {
     localStorage.removeItem('mvsep_enc_token');
@@ -594,19 +704,256 @@ mvsepLogoutBtn.onclick = () => {
     mvsepWorkView.style.display = 'none';
     mvsepLoginView.style.display = 'block';
     mvsepLogoutBtn.style.display = 'none';
+    mvsepHistoryBtn.style.display = 'none';
     
-    // Clear any previous results
     mvsepJob.results = [];
     mvsepResultsList.innerHTML = '';
     mvsepResultsArea.style.display = 'none';
     setLoginMode('account');
 };
 
+mvsepHistoryBtn.onclick = () => {
+    if (mvsepJob.active) {
+        alert("Please wait for the current job to finish.");
+        return;
+    }
+    const titleRaw = mvsepResultsTitle.textContent || "";
+    const title = titleRaw.trim().toUpperCase();
+    const isHistoryView = (mvsepResultsArea.style.display !== 'none') && 
+                          (title === "PREVIOUS SEPARATIONS" || title === "FILES FOUND");
+
+    if (isHistoryView) {
+        if (mvsepJob.results.length > 0 && mvsepJob.results[0].isUrl) {
+            mvsepJob.results = [];
+        }
+        showMvsepWorkView();
+    } else {
+        currentHistoryPage = 0;
+        fetchHistory(currentHistoryPage);
+    }
+};
+
+async function fetchHistory(page) {
+    mvsepUploadArea.style.display = 'none';
+    mvsepResultsArea.style.display = 'block';
+    mvsepResultsTitle.innerText = "Previous Separations";
+    mvsepResultsList.innerHTML = '<div style="text-align:center; color:#666; padding:20px;">Fetching history...</div>';
+    mvsepSaveAllBtn.style.display = 'none';
+    
+    const offset = page * HISTORY_LIMIT;
+    try {
+        const res = await fetch(`${API_AUTH}/separation_history?api_token=${mvsepToken}&start=${offset}&limit=${HISTORY_LIMIT}`);
+        const json = await res.json();
+        if (json.success) renderHistoryList(json.data);
+        else mvsepResultsList.innerHTML = '<div style="text-align:center; color:#ff3b30;">Failed to load history</div>';
+    } catch(e) {
+        console.error(e);
+        mvsepResultsList.innerHTML = '<div style="text-align:center; color:#ff3b30;">Connection Error</div>';
+    }
+}
+
+function renderHistoryList(historyData) {
+    mvsepResultsList.innerHTML = '';
+    
+    if (!historyData || historyData.length === 0) {
+        mvsepResultsList.innerHTML = '<div style="text-align:center; color:#666; padding:10px;">No more history.</div>';
+        if (currentHistoryPage > 0) {
+             const prevBtn = document.createElement('button');
+             prevBtn.className = 'text-btn';
+             prevBtn.innerText = "← Previous Page";
+             prevBtn.onclick = () => { currentHistoryPage--; fetchHistory(currentHistoryPage); };
+             mvsepResultsList.appendChild(prevBtn);
+        }
+        return;
+    }
+
+    historyData.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'stem-row';
+        const algoName = item.algorithm ? item.algorithm.name : "Unknown Model";
+        const timeLeft = item.time_left ? item.time_left : "Unknown";
+        
+        row.innerHTML = `
+            <div style="display:flex; flex-direction:column; overflow:hidden;">
+                <div class="stem-name" style="font-weight:bold; color:#e6e6e6;">${algoName}</div>
+                <div style="font-size:0.6rem; color:#666;">Expires: ${timeLeft}</div>
+            </div>
+            <div class="stem-actions">
+                <button class="stem-btn add" style="font-size:0.65rem;">LOAD FILES</button>
+            </div>
+        `;
+        
+        const loadBtn = row.querySelector('button');
+        if (!item.job_exists) {
+            loadBtn.disabled = true;
+            loadBtn.innerText = "EXPIRED";
+            loadBtn.style.opacity = "0.5";
+            loadBtn.style.background = "transparent";
+        } else {
+            loadBtn.onclick = () => loadHistoryItem(item.hash);
+        }
+        mvsepResultsList.appendChild(row);
+    });
+    
+    const paginationDiv = document.createElement('div');
+    paginationDiv.className = 'pagination-controls';
+    
+    const prevBtn = document.createElement('button');
+    prevBtn.className = 'page-btn';
+    prevBtn.innerText = "◄";
+    prevBtn.disabled = currentHistoryPage === 0;
+    prevBtn.onclick = () => { currentHistoryPage--; fetchHistory(currentHistoryPage); };
+    
+    const pageInfo = document.createElement('span');
+    pageInfo.className = 'page-info';
+    pageInfo.innerText = `Page ${currentHistoryPage + 1}`;
+    
+    const nextBtn = document.createElement('button');
+    nextBtn.className = 'page-btn';
+    nextBtn.innerText = "►";
+    nextBtn.disabled = historyData.length < HISTORY_LIMIT; 
+    nextBtn.onclick = () => { currentHistoryPage++; fetchHistory(currentHistoryPage); };
+    
+    paginationDiv.appendChild(prevBtn);
+    paginationDiv.appendChild(pageInfo);
+    paginationDiv.appendChild(nextBtn);
+    
+    mvsepResultsList.appendChild(paginationDiv);
+}
+
+async function loadHistoryItem(hash) {
+    mvsepResultsTitle.innerText = "Files Found"; 
+    mvsepResultsList.innerHTML = '<div style="text-align:center; color:#ccff00; padding:20px;">Fetching file links...</div>';
+    
+    try {
+        const files = await pollMvsepTask(hash);
+        mvsepJob.results = [];
+        
+        const processFiles = (fileList) => {
+            const results = [];
+            const add = (url, name) => {
+                results.push({ url: url, name: name });
+            };
+            if (Array.isArray(fileList)) {
+                fileList.forEach(f => {
+                    const name = f.name || f.type || "Stem";
+                    const url = f.url || f.link;
+                    if(url) add(url, name);
+                });
+            } else if (typeof fileList === 'object') {
+                Object.entries(fileList).forEach(([k, v]) => {
+                    let url = "";
+                    let name = k;
+                    if (typeof v === 'string') url = v;
+                    else if (v && v.url) { url = v.url; name = v.type || name; }
+                    if(url) add(url, name);
+                });
+            }
+            return results;
+        };
+
+        const fileResults = processFiles(files);
+        renderHistoryFiles(fileResults);
+
+    } catch (e) {
+        console.error(e);
+        mvsepResultsList.innerHTML = `<div style="text-align:center; color:#ff3b30;">Error: ${e.message}</div>`;
+        setTimeout(() => fetchHistory(currentHistoryPage), 2000); 
+    }
+}
+
+function renderHistoryFiles(files) {
+    mvsepResultsTitle.innerText = "Files Found";
+    mvsepResultsList.innerHTML = '';
+    mvsepSaveAllBtn.style.display = 'inline-block';
+    
+    mvsepJob.results = files.map(f => ({ ...f, isUrl: true })); 
+
+    files.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'stem-row';
+        row.innerHTML = `
+            <div class="stem-name">${item.name}</div>
+            <div class="stem-actions">
+                <button class="stem-btn download" title="Download">⬇</button>
+                <button class="stem-btn add" title="Import to Mixer">+</button>
+            </div>
+        `;
+        
+        const dlBtn = row.querySelector('.download');
+        dlBtn.onclick = () => {
+            dlBtn.innerText = "...";
+            downloadUrlToBlob(item.url).then(blob => {
+                downloadBlob(blob, item.name);
+                dlBtn.innerText = "⬇";
+            });
+        };
+        
+        const addBtn = row.querySelector('.add');
+        addBtn.onclick = async () => {
+             addBtn.innerText = "...";
+             try {
+                 const blob = await downloadUrlToBlob(item.url);
+                 const f = new File([blob], item.name, { type: "audio/wav" });
+                 handleFiles([f], true); 
+                 alert(`${item.name} imported.`);
+                 addBtn.innerText = "✓";
+             } catch(e) {
+                 alert("Download failed");
+                 addBtn.innerText = "+";
+             }
+        };
+        
+        mvsepResultsList.appendChild(row);
+    });
+
+    const importAllDiv = document.createElement('div');
+    importAllDiv.style.textAlign = 'center';
+    importAllDiv.style.marginTop = '15px';
+    const importAllBtn = document.createElement('button');
+    importAllBtn.className = 'btn active';
+    importAllBtn.innerText = "Import All to Mixer";
+    importAllBtn.style.width = '100%';
+    
+    importAllBtn.onclick = async () => {
+        importAllBtn.disabled = true;
+        importAllBtn.innerText = "Downloading...";
+        try {
+            const newFiles = [];
+            for (const item of files) {
+                const blob = await downloadUrlToBlob(item.url);
+                const f = new File([blob], item.name, { type: "audio/wav" });
+                newFiles.push(f);
+            }
+            handleFiles(newFiles, true); 
+            mvsepModal.style.display = 'none';
+            importModal.style.display = 'flex';
+        } catch (e) {
+            console.error("Import All Failed", e);
+            alert("Failed to download one or more files.");
+            importAllBtn.disabled = false;
+            importAllBtn.innerText = "Import All to Mixer";
+        }
+    };
+    
+    importAllDiv.appendChild(importAllBtn);
+    mvsepResultsList.appendChild(importAllDiv);
+    
+    const backDiv = document.createElement('div');
+    backDiv.style.textAlign = 'center';
+    backDiv.style.marginTop = '15px';
+    const backBtn = document.createElement('button');
+    backBtn.className = 'text-btn';
+    backBtn.innerText = "← Back to History List";
+    backBtn.onclick = () => fetchHistory(currentHistoryPage);
+    backDiv.appendChild(backBtn);
+    mvsepResultsList.appendChild(backDiv);
+}
+
 mvsepLoginBtn.onclick = async () => {
     mvsepLoginError.style.display = 'none';
     mvsepLoginView.classList.remove('shake');
     
-    // --- MODE 1: ACCOUNT LOGIN ---
     if (loginMode === 'account') {
         const email = mvsepEmailInput.value.trim();
         const pass = mvsepPassInput.value.trim();
@@ -623,30 +970,19 @@ mvsepLoginBtn.onclick = async () => {
             const formData = new FormData();
             formData.append('email', email);
             formData.append('password', pass);
-            
-            // CORRECTED ENDPOINT: /api/app/login (no "separation")
-            const res = await fetch(`${API_AUTH}/login`, {
-                method: 'POST',
-                body: formData
-            });
-            
-            // Check for HTML response (404/500 from Proxy)
+            const res = await fetch(`${API_AUTH}/login`, { method: 'POST', body: formData });
             const contentType = res.headers.get("content-type");
             if (contentType && contentType.indexOf("application/json") === -1) {
-                console.error("Server returned HTML (likely 404/500):", await res.text());
                 triggerError("Login Proxy Error (Check Console)");
                 resetLoginBtn();
                 return;
             }
-
             if (res.status === 400 || res.status === 401 || res.status === 403) {
                 triggerError("Incorrect Email or Password");
                 resetLoginBtn();
                 return;
             }
-
             const data = await res.json();
-            
             if (data.success) {
                 mvsepToken = data.data.api_token;
                 localStorage.setItem('mvsep_enc_token', encryptToken(mvsepToken));
@@ -660,22 +996,16 @@ mvsepLoginBtn.onclick = async () => {
         }
         resetLoginBtn();
         
-    } 
-    // --- MODE 2: API KEY ---
-    else {
+    } else {
         const key = mvsepKeyInput.value.trim();
-        
         if (!key) {
             triggerError("Please enter your API Key");
             return;
         }
-        
         if (key.length < 10) {
              triggerError("Invalid API Key format");
              return;
         }
-
-        // We assume valid for now
         mvsepToken = key;
         localStorage.setItem('mvsep_enc_token', encryptToken(mvsepToken));
         showMvsepWorkView();
@@ -685,7 +1015,7 @@ mvsepLoginBtn.onclick = async () => {
 function triggerError(msg) {
     mvsepLoginError.innerText = msg;
     mvsepLoginError.style.display = 'block';
-    void mvsepLoginView.offsetWidth; // Trigger reflow
+    void mvsepLoginView.offsetWidth; 
     mvsepLoginView.classList.add('shake');
 }
 
@@ -696,10 +1026,11 @@ function resetLoginBtn() {
 
 function showMvsepWorkView() {
     mvsepLoginView.style.display = 'none';
-    mvsepWorkView.style.display = 'flex'; // Flex for layout
+    mvsepWorkView.style.display = 'flex'; 
     mvsepLogoutBtn.style.display = 'block';
+    mvsepHistoryBtn.style.display = 'block';
+    if (mvsepResultsTitle) mvsepResultsTitle.innerText = "Generated Stems";
     
-    // RESTORE STATE
     if (mvsepJob.active) {
         mvsepFileBtn.disabled = true;
         mvsepFileName.innerText = "Separation in progress...";
@@ -713,23 +1044,20 @@ function showMvsepWorkView() {
         });
         mvsepLog.scrollTop = mvsepLog.scrollHeight;
         mvsepProgress.style.width = mvsepJob.progress + '%';
-        
         mvsepUploadArea.style.display = 'none';
         mvsepCancelWorkBtn.style.display = 'inline-block';
         mvsepBackBtn.style.display = 'none';
         mvsepResultsArea.style.display = 'none';
-        
     } else {
         mvsepFileBtn.disabled = false;
         mvsepCancelWorkBtn.style.display = 'none';
         mvsepBackBtn.style.display = 'inline-block';
-        
-        // Check if we have results to show from a previous run
         if (mvsepJob.results.length > 0) {
-            renderMvsepResults();
+            if(mvsepJob.results[0].isUrl) renderHistoryFiles(mvsepJob.results);
+            else renderMvsepResults(); 
             mvsepUploadArea.style.display = 'none';
+            mvsepResultsArea.style.display = 'block';
         } else {
-            // New Run State
             mvsepUploadArea.style.display = 'block';
             mvsepResultsArea.style.display = 'none';
             mvsepSaveAllBtn.style.display = 'none';
@@ -753,14 +1081,11 @@ mvsepFileBtn.onchange = async (e) => {
     startMvsepWorkflow(file);
 };
 
-// Back / Close
 mvsepBackBtn.onclick = () => {
     mvsepModal.style.display = 'none';
     if (!mvsepJob.active && uploadedFiles.length > 0) {
         importModal.style.display = 'flex';
-    } else {
-        // If we backed out but no files loaded, just show main screen
-    }
+    } 
     updateMvsepButtonState();
 };
 
@@ -796,7 +1121,6 @@ function logMvsep(msg, type='info') {
     mvsepLog.scrollTop = mvsepLog.scrollHeight;
 }
 
-// 2. LOGIC
 async function startMvsepWorkflow(file) {
     if (mvsepJob.active) return; 
     
@@ -823,12 +1147,10 @@ async function startMvsepWorkflow(file) {
     try {
         logMvsep("Starting Separation Workflow...", "info");
         
-        // CHECK CANCEL
         const checkCancel = () => {
             if (mvsepJob.cancelRequested) throw new Error("Cancelled by User");
         };
 
-        // STAGE 1: Model 63
         mvsepJob.stage = 'stage1_upload';
         logMvsep("Stage 1/2: Uploading to Model 63...");
         updateJobProgress(10);
@@ -884,7 +1206,6 @@ async function startMvsepWorkflow(file) {
         updateJobProgress(40);
         logMvsep("Stage 1 Complete. Sending Vocals to Stage 2...");
 
-        // STAGE 2: KARAOKE (Model 49)
         mvsepJob.stage = 'stage2_upload';
         logMvsep("Stage 2/2: Separating Vocals (Model 49)...");
         updateJobProgress(50);
@@ -931,23 +1252,19 @@ async function startMvsepWorkflow(file) {
             }
         }
 
-        // 3. COMPILE RESULTS
         updateJobProgress(95);
         logMvsep("Processing Files...");
 
-        // Helper to add to results array
         const addToResults = (blob, label) => {
              if(blob) mvsepJob.results.push({ blob, name: label });
         };
 
-        // Process Stage 2 (Vocals)
         for (const [key, blob] of Object.entries(stage2Blobs)) {
             const k = key.toLowerCase();
             if (k.includes('lead') || k.includes('vocals')) addToResults(blob, "Lead Vocal.wav");
             else if (k.includes('back') || k.includes('other') || k.includes('instrumental')) addToResults(blob, "Backing Vocal.wav");
         }
 
-        // Process Stage 1 (Instruments)
         for (const [key, blob] of Object.entries(stage1Blobs)) {
             const k = key.toLowerCase();
             if (k.includes('instrum') || k.includes('back-instrum')) continue;
@@ -959,7 +1276,6 @@ async function startMvsepWorkflow(file) {
             else if (k.includes('other')) addToResults(blob, "Other.wav");
         }
 
-        // FINISH
         mvsepJob.active = false;
         updateMvsepButtonState();
         renderMvsepResults();
@@ -971,12 +1287,8 @@ async function startMvsepWorkflow(file) {
         logMvsep(`Error: ${e.message}`, 'error');
         mvsepJob.active = false;
         
-        // Reset UI partially so they can try again or cancel
         mvsepCancelWorkBtn.style.display = 'none';
         mvsepBackBtn.style.display = 'inline-block';
-        
-        // If we have some results (partial), show them?
-        // For now, if failed, we assume full fail, but offer back button
         updateMvsepButtonState();
     }
 }
@@ -984,10 +1296,9 @@ async function startMvsepWorkflow(file) {
 function renderMvsepResults() {
     mvsepUploadArea.style.display = 'none';
     mvsepCancelWorkBtn.style.display = 'none';
-    mvsepBackBtn.style.display = 'inline-block'; // Show Close
+    mvsepBackBtn.style.display = 'inline-block'; 
     mvsepResultsArea.style.display = 'block';
     mvsepSaveAllBtn.style.display = 'inline-block';
-    
     mvsepResultsList.innerHTML = '';
     
     mvsepJob.results.forEach((item, idx) => {
@@ -1006,17 +1317,13 @@ function renderMvsepResults() {
         
         const addBtn = row.querySelector('.add');
         addBtn.onclick = () => {
-             // Add single file to uploadedFiles and mixer list
              const f = new File([item.blob], item.name, { type: "audio/wav" });
-             uploadedFiles.push(f);
+             handleFiles([f], true); 
              alert(`${item.name} added to Import list.`);
-             handleFiles(uploadedFiles); // Re-run logic to update assignment list
         };
-        
         mvsepResultsList.appendChild(row);
     });
 
-    // Add "Import All" button at bottom of list
     const importAllDiv = document.createElement('div');
     importAllDiv.style.textAlign = 'center';
     importAllDiv.style.marginTop = '15px';
@@ -1024,43 +1331,41 @@ function renderMvsepResults() {
     importAllBtn.className = 'btn active';
     importAllBtn.innerText = "Import All to Mixer";
     importAllBtn.style.width = '100%';
+    
     importAllBtn.onclick = () => {
-        uploadedFiles = []; // Clear current for clean import? Or append? Let's clear to be safe based on workflow
+        const newFiles = [];
         mvsepJob.results.forEach(item => {
-             uploadedFiles.push(new File([item.blob], item.name, { type: "audio/wav" }));
+             newFiles.push(new File([item.blob], item.name, { type: "audio/wav" }));
         });
-        handleFiles(uploadedFiles);
+        handleFiles(newFiles, true); 
         mvsepModal.style.display = 'none';
         importModal.style.display = 'flex';
-        
-        // Auto-assign logic happens in handleFiles, but we need to update the DOM selects
-        setTimeout(() => {
-             const autoAssign = [
-                 {name: 'Lead Vocal', idx: 0}, {name: 'Backing', idx: 1},
-                 {name: 'Drums', idx: 2}, {name: 'Bass', idx: 3},
-                 {name: 'Piano', idx: 4}, {name: 'Guitar', idx: 5},
-                 {name: 'Other', idx: 6}
-             ];
-             
-             autoAssign.forEach(a => {
-                 const select = document.getElementById(`assign-${a.idx}`);
-                 // Find matching file
-                 uploadedFiles.forEach((f, fIdx) => {
-                     if (f.name.includes(a.name) && select.value === "") {
-                         select.value = fIdx;
-                     }
-                 });
-             });
-        }, 100);
     };
     importAllDiv.appendChild(importAllBtn);
     mvsepResultsList.appendChild(importAllDiv);
 }
 
-mvsepSaveAllBtn.onclick = () => {
-    mvsepJob.results.forEach(item => {
-        downloadBlob(item.blob, item.name);
-    });
+mvsepSaveAllBtn.onclick = async () => {
+    if (mvsepJob.results.length === 0) return;
+    const isUrl = mvsepJob.results[0].isUrl;
+    
+    mvsepSaveAllBtn.innerText = "Downloading...";
+    mvsepSaveAllBtn.disabled = true;
+
+    for (const item of mvsepJob.results) {
+        if (isUrl) {
+            try {
+                const blob = await downloadUrlToBlob(item.url);
+                downloadBlob(blob, item.name);
+            } catch(e) { console.error("Save All Error", e); }
+        } else {
+            downloadBlob(item.blob, item.name);
+        }
+        await new Promise(r => setTimeout(r, 500)); 
+    }
+    
+    mvsepSaveAllBtn.innerText = "Save All 💾";
+    mvsepSaveAllBtn.disabled = false;
 };
 
 function updateJobProgress(pct) {
@@ -1068,7 +1373,6 @@ function updateJobProgress(pct) {
     mvsepProgress.style.width = pct + '%';
 }
 
-// API HELPERS
 async function uploadToMvsep(file, sepType, modelOpt) {
     if(mvsepJob.cancelRequested) throw new Error("Cancelled");
     
@@ -1076,22 +1380,12 @@ async function uploadToMvsep(file, sepType, modelOpt) {
     formData.append('api_token', mvsepToken);
     formData.append('audiofile', file);
     formData.append('sep_type', sepType);
-    
-    if (modelOpt) {
-        formData.append('add_opt1', modelOpt); 
-    }
-    
+    if (modelOpt) formData.append('add_opt1', modelOpt); 
     formData.append('is_demo', '0');
     formData.append('output_format', '0');
 
-    // CORRECTED: /api/separation/create
     const proxyUrl = `${API_SEP}/create?api_token=${mvsepToken}&t=${Date.now()}`;
-
-    const res = await fetch(proxyUrl, {
-        method: 'POST',
-        body: formData,
-        headers: { 'Cache-Control': 'no-cache' }
-    });
+    const res = await fetch(proxyUrl, { method: 'POST', body: formData, headers: { 'Cache-Control': 'no-cache' } });
     
     if(mvsepJob.cancelRequested) throw new Error("Cancelled");
     
@@ -1105,7 +1399,6 @@ async function uploadToMvsep(file, sepType, modelOpt) {
         const errMsg = data.errors ? data.errors.join(", ") : (data.message || "Unknown Error");
         throw new Error(`API Error: ${errMsg}`);
     }
-
     return data.data.hash;
 }
 
@@ -1118,7 +1411,6 @@ async function pollMvsepTask(hash) {
                 return;
             }
             try {
-                // CORRECTED: /api/separation/get
                 const proxyUrl = `${API_SEP}/get?hash=${hash}&api_token=${mvsepToken}&t=${Date.now()}`;
                 const res = await fetch(proxyUrl, { headers: { 'Cache-Control': 'no-cache' } });
                 const responseJson = await res.json();
@@ -1190,43 +1482,6 @@ function toggleMaster() {
     masterBtn.classList.toggle('active', isMasterVisible);
     const activeIndices = buffers.map((b, i) => b ? i : -1).filter(i => i !== -1);
     renderMixer(activeIndices);
-}
-
-function toggleLink(i) {
-    linkState[i] = !linkState[i];
-    const btn = document.getElementById(`link-${i}`);
-    if(btn) btn.classList.toggle('active', linkState[i]);
-}
-function toggleMute(i) {
-    const anySolo = soloState.some(s => s);
-    if (anySolo) return;
-    const newState = !muteState[i];
-    muteState[i] = newState;
-    if (linkState[i]) {
-        TRACKS.forEach((_, tIdx) => { if (linkState[tIdx]) muteState[tIdx] = newState; });
-    }
-    TRACKS.forEach((_, idx) => updateVisualsForTrack(idx));
-    updateAudioEngine();
-}
-function toggleSolo(i) {
-    const newState = !soloState[i];
-    soloState[i] = newState;
-    if (linkState[i]) {
-        TRACKS.forEach((_, tIdx) => { if (linkState[tIdx]) soloState[tIdx] = newState; });
-    }
-    TRACKS.forEach((_, idx) => updateVisualsForTrack(idx));
-    updateGlobalSoloVisuals();
-    updateAudioEngine();
-}
-function updateAudioEngine() {
-    const anySolo = soloState.some(s => s);
-    TRACKS.forEach((_, i) => {
-        if (!gains[i]) return;
-        let shouldPlay = false;
-        if (anySolo) shouldPlay = soloState[i];
-        else shouldPlay = !muteState[i];
-        gains[i].gain.setTargetAtTime(shouldPlay ? volumeState[i] : 0, audioCtx.currentTime, 0.03);
-    });
 }
 
 function play(offset) {
@@ -1303,18 +1558,37 @@ function updateSeekUI(reset = false) {
         currentTimeLabel.innerText = "0:00"; 
         return; 
     }
-    if (!isPlaying) return;
 
-    let current = audioCtx.currentTime - startTime;
+    let current = 0;
+    // PRIORITY: Trust finger when scrubbing, trust engine when playing
+    if (isScrubbing) {
+        current = pausedAt;
+    } else if (isPlaying) {
+        current = audioCtx.currentTime - startTime;
+    } else {
+        current = pausedAt;
+    }
     
     if (current >= duration) {
-        if (isRecording) stopRecording();
-        isLooping ? (stopAudio(), play(0)) : stopAudio(); 
-        return;
+        if (isPlaying && !isScrubbing) {
+            if (isRecording) stopRecording();
+            isLooping ? (stopAudio(), play(0)) : stopAudio(); 
+            return;
+        } else if (!isScrubbing) {
+            current = duration;
+        }
     }
-    pausedAt = current;
-    const currentPct = (current / duration) * 100;
-    seekBar.value = currentPct;
+    
+    // Update PausedAt if playing normally
+    if (isPlaying && !isScrubbing) pausedAt = current;
+
+    const currentPct = (duration > 0) ? (current / duration) * 100 : 0;
+    
+    // Only update value if we aren't currently dragging to avoid fighting input
+    if (!isScrubbing) {
+        seekBar.value = currentPct;
+    }
+    
     currentTimeLabel.innerText = formatTime(current);
     
     const redColor = `rgba(255, 59, 48, ${recShadowAlpha})`;
@@ -1328,7 +1602,11 @@ function updateSeekUI(reset = false) {
     }
     const progressGradient = `linear-gradient(to right, #e6e6e6 0%, #e6e6e6 ${currentPct}%, #222 ${currentPct}%, #222 100%)`;
     seekBar.style.backgroundImage = shadowGradient ? `${shadowGradient}, ${progressGradient}` : progressGradient;
-    window.seekAnim = requestAnimationFrame(() => updateSeekUI());
+    
+    // Keep loop active while playing, even if scrubbing
+    if (isPlaying) {
+        window.seekAnim = requestAnimationFrame(() => updateSeekUI());
+    }
 }
 
 function renderVisualizers() {
@@ -1336,12 +1614,27 @@ function renderVisualizers() {
         requestAnimationFrame(renderVisualizers);
         return;
     }
+    
     analysers.forEach((a, i) => {
         if (!a) return; 
         a.getByteFrequencyData(freqData[i]);
+        
+        // VU Calculation
         const avg = freqData[i].reduce((p, c) => p + c) / freqData[i].length;
         const bars = document.querySelectorAll(`#vu-${i} .vu-bar`);
         bars.forEach((b, j) => b.className = `vu-bar ${j < (avg/20) ? (j<8?'active-low':j<11?'active-mid':'active-high') : ''}`);
+        
+        // NEW: Individual Track Peak Logic
+        const peakLed = document.getElementById(`peak-${i}`);
+        if (peakLed) {
+             // Simple peak detection from FFT data
+            if (avg > 230) { // Threshold for "clip"
+                peakLed.classList.add('clipping');
+                trackPeakHolds[i] = Date.now() + 1000;
+            } else if (Date.now() > trackPeakHolds[i]) {
+                peakLed.classList.remove('clipping');
+            }
+        }
     });
     
     if(masterAnalyser && isMasterVisible) {
@@ -1533,7 +1826,6 @@ async function stopRecording() {
                     masterGain.disconnect(videoStreamDest);
                     videoStreamDest = null;
                 }
-                
                 let ext = 'mp4';
                 if (mediaRecorder.mimeType.includes('webm')) ext = 'webm';
                 downloadBlob(blob, `${name}.${ext}`);
@@ -1548,10 +1840,8 @@ async function stopRecording() {
             masterGain.disconnect(recordNode);
             recordNode = null;
         }
-
         const bitDepth = parseInt(recBitDepthSelect.value);
         const bitrate = parseInt(recBitrateSelect.value);
-
         if (format === 'mp3') await exportMp3(name, bitrate); 
         else await exportWav(name, bitDepth);
     }
@@ -1592,7 +1882,6 @@ async function exportMp3(name, bitrate) {
     for (let i = 0; i < lp.length; i += chunkSize) {
         const buf = mp3.encodeBuffer(lp.subarray(i, i+chunkSize), rp.subarray(i, i+chunkSize));
         if (buf.length > 0) data.push(buf);
-        
         const p = Math.round((i/lp.length)*100);
         encodingBar.style.width = p+'%';
         encodingPercent.innerText = p+'%';
@@ -1612,7 +1901,6 @@ async function exportWav(name, bitDepth) {
 
     const l = mergeBuffers(recBuffersL, recLength);
     const r = mergeBuffers(recBuffersR, recLength);
-    
     const interleaved = interleave(l, r);
     
     let bytesPerSample = bitDepth / 8;
@@ -1693,17 +1981,67 @@ document.getElementById('masterBtn').onclick = toggleMaster;
 playPauseBtn.onclick = () => isPlaying ? pauseAudio() : play(pausedAt);
 stopBtn.onclick = stopAudio;
 clearBtn.onclick = clearProject;
+
+// --- SEEK BAR EVENT HANDLING ---
+const startScrub = () => {
+    isScrubbing = true;
+    wasPlayingBeforeScrub = isPlaying;
+    
+    // Low Pass Muffle ON
+    if (audioCtx && scrubFilter) {
+        scrubFilter.frequency.setTargetAtTime(400, audioCtx.currentTime, 0.05);
+    }
+    
+    // NOTE: We do not stop here, we just flag scrubbing.
+};
+
+const endScrub = () => {
+    if (!isScrubbing) return;
+    isScrubbing = false;
+    
+    // Low Pass Muffle OFF (Fade out)
+    if (audioCtx && scrubFilter) {
+        scrubFilter.frequency.setTargetAtTime(22000, audioCtx.currentTime, 0.2);
+    }
+    
+    if (wasPlayingBeforeScrub) {
+        // Just ensure we are clean
+        sources.forEach(s => { try { s.stop(); } catch(e){} });
+        play(pausedAt);
+    } else {
+        stopAudio();
+    }
+};
+
+seekBar.onmousedown = startScrub;
+seekBar.ontouchstart = startScrub;
+
 seekBar.oninput = (e) => {
     const val = parseFloat(e.target.value);
     let newPos = (val / 100) * duration;
     if (newPos > duration) newPos = duration;
-    pausedAt = newPos; updateSeekUI(); 
-    if (newPos >= duration) {
-        if (isPlaying) stopAudio(); 
-        return;
-    }
-    if (isPlaying) { sources.forEach(s => s && s.stop()); play(newPos); }
+    pausedAt = newPos;
+    
+    // FIX: THROTTLED SCRUB PLAYBACK
+    // Only restart audio engine if we have moved significantly or time has passed
+    // This prevents the "infinite overlap" chaos.
+    
+    const now = Date.now();
+    if (isPlaying && (now - lastScrubTime > 100)) { // 100ms limit
+        // Hard stop current
+        sources.forEach(s => { try { s.stop(); } catch(e){} });
+        play(newPos);
+        lastScrubTime = now;
+    } 
+    
+    // Always update visual UI immediately for responsiveness
+    updateSeekUI(); 
 };
+
+seekBar.onmouseup = endScrub;
+seekBar.ontouchend = endScrub;
+seekBar.onchange = endScrub;
+
 document.addEventListener('mouseup', () => isMouseDown = false);
 document.addEventListener('touchend', () => isMouseDown = false);
 document.getElementById('importModal').onclick = (e) => { if(e.target.id === 'importModal') e.target.style.display = 'none'; };
@@ -1719,8 +2057,6 @@ document.getElementById('layoutBtn').onclick = () => {
 if (mvsepTopCloseBtn) {
     mvsepTopCloseBtn.onclick = () => {
         mvsepModal.style.display = 'none';
-        // We intentionally do NOT reset the job or the views.
-        // If the user clicks "Import" > "MVSEP" again, the existing state (progress bar) will show up.
     };
 }
 
